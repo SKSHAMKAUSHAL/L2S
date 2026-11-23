@@ -20,7 +20,7 @@ const getConfig = () => ({
   clips: parseInt(process.env.CLIPS || '5', 10),
   minLength: 15,
   maxLength: 60,
-  subtitleStyle: 'tiktok',
+  subtitleStyle: 'hormozi',
   cacheDir: path.join(os.homedir(), '.skate', 'cache'),
 });
 
@@ -217,7 +217,7 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
   const pipeline = { stopped: false, videoPath: null, selected: null, clipsWithMeta: null, transcript: null };
   currentPipeline = pipeline;
 
-  const { language = 'auto', description, timestamps, clipMode, clipCount, defaultRatio = '9:16', defaultZoom = 1.0, videoQuality = 'high', exportQuality = 'balanced' } = options;
+  const { language = 'auto', description, timestamps, clipMode, clipCount, defaultRatio = '9:16', defaultZoom = 1.0, videoQuality = 'high', exportQuality = 'balanced', captionStyle } = options;
   const hasTimestamps = timestamps && timestamps.length > 0;
   const onlyManual = clipMode === 'only';
 
@@ -541,6 +541,7 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
           return Number.isFinite(parsed) ? Math.min(3.0, Math.max(0.1, parsed)) : 1.0;
         })(),
         exportQuality: exportQuality || 'balanced',
+        captionPreset: captionStyle || options.subtitleStyle || config.subtitleStyle || 'hormozi',
       };
     });
 

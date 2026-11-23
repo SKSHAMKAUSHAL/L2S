@@ -16,7 +16,7 @@ describe('Professional Caption Studio & ASS Engine', () => {
   ];
 
   test('provides all 8 professional caption presets', () => {
-    const requiredPresets = ['minimal', 'cinematic', 'bold', 'karaoke', 'pop', 'podcast', 'educational', 'gaming'];
+    const requiredPresets = ['minimal', 'cinematic', 'hormozi', 'karaoke', 'pop', 'box', 'underline', 'neon'];
     for (const key of requiredPresets) {
       const preset = CAPTION_PRESETS[key];
       assert.ok(preset, `Preset '${key}' must exist`);

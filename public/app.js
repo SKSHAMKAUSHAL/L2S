@@ -13,6 +13,7 @@ const els = {
   sourceInput: $('#source-input'),
   genreSelect: $('#genre-select'),
   languageSelect: $('#language-select'),
+  captionStyleSelect: $('#caption-style-select'),
   generateBtn: $('#generate-btn') || $('#process-btn'),
   stopBtn: $('#stop-btn'),
   inputHint: $('#input-hint'),
@@ -151,7 +152,7 @@ let preGenZoom = 1.0;
 let clipCount = 'auto';
 let videoQuality = 'best'; // Video download quality profile
 let exportQuality = 'balanced'; // Export encoding profile
-let currentCaptionPreset = 'bold'; // Active selected caption preset
+let currentCaptionPreset = 'hormozi'; // Active selected caption preset
 let comparisonCaptionPreset = 'karaoke'; // Side-by-side comparison preset
 let captionCustomSettings = {
   fontFamily: 'Montserrat',
@@ -493,6 +494,42 @@ els.savePathSet.addEventListener('click', async () => {
   }
 });
 
+// ─── Caption Style Selector ───────────────────
+if (els.captionStyleSelect) {
+  els.captionStyleSelect.addEventListener('change', () => {
+    const val = els.captionStyleSelect.value;
+    currentCaptionPreset = val;
+    const previewSample = document.getElementById('caption-style-preview-sample');
+    if (previewSample) {
+      if (val === 'neon') {
+        previewSample.style.color = '#00FFFF';
+        previewSample.style.textShadow = '0 0 8px #FF00FF';
+        previewSample.style.textDecoration = 'none';
+      } else if (val === 'karaoke') {
+        previewSample.style.color = '#00FF66';
+        previewSample.style.textShadow = 'none';
+        previewSample.style.textDecoration = 'none';
+      } else if (val === 'pop') {
+        previewSample.style.color = '#FFE600';
+        previewSample.style.textShadow = '2px 2px 0 #000';
+        previewSample.style.textDecoration = 'none';
+      } else if (val === 'underline') {
+        previewSample.style.color = '#FF5533';
+        previewSample.style.textShadow = 'none';
+        previewSample.style.textDecoration = 'underline';
+      } else if (val === 'cinematic') {
+        previewSample.style.color = '#E5B533';
+        previewSample.style.textShadow = '0 2px 4px rgba(0,0,0,0.8)';
+        previewSample.style.textDecoration = 'none';
+      } else {
+        previewSample.style.color = '#FFE600';
+        previewSample.style.textShadow = 'none';
+        previewSample.style.textDecoration = 'none';
+      }
+    }
+  });
+}
+
 // ─── Video Info Fetch & Workspace ────────────
 els.sourceInput.addEventListener('input', () => {
   clearTimeout(videoInfoTimeout);
@@ -662,7 +699,7 @@ generateBtnTarget?.addEventListener('click', async (e) => {
     const res = await fetch('/api/process', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, genre, language, timestamps, clipMode, clipCount, defaultRatio, defaultZoom, videoQuality, exportQuality, sessionId: currentSessionId }),
+      body: JSON.stringify({ source, genre, language, timestamps, clipMode, clipCount, defaultRatio, defaultZoom, videoQuality, exportQuality, captionStyle: els.captionStyleSelect?.value || currentCaptionPreset || 'hormozi', sessionId: currentSessionId }),
     });
 
     const data = await res.json();

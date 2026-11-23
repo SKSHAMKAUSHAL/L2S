@@ -9,12 +9,12 @@ test('API Endpoints & Integration', async (t) => {
     assert.equal(keys.length, 8);
     assert.ok(keys.includes('minimal'));
     assert.ok(keys.includes('cinematic'));
-    assert.ok(keys.includes('bold'));
+    assert.ok(keys.includes('hormozi'));
     assert.ok(keys.includes('karaoke'));
     assert.ok(keys.includes('pop'));
-    assert.ok(keys.includes('podcast'));
-    assert.ok(keys.includes('educational'));
-    assert.ok(keys.includes('gaming'));
+    assert.ok(keys.includes('box'));
+    assert.ok(keys.includes('underline'));
+    assert.ok(keys.includes('neon'));
 
     for (const key of keys) {
       const preset = CAPTION_PRESETS[key];

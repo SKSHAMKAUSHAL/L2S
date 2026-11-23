@@ -46,7 +46,7 @@ describe('Prompt 5 — Professional Caption Studio, Presets & Parity Tests', () 
     });
 
     test('getSharedStyleModel generates both ASS and CSS objects for all 8 presets', () => {
-      const presets = ['minimal', 'cinematic', 'bold', 'karaoke', 'pop', 'podcast', 'educational', 'gaming'];
+      const presets = ['minimal', 'cinematic', 'hormozi', 'karaoke', 'pop', 'box', 'underline', 'neon'];
 
       for (const presetId of presets) {
         const model = getSharedStyleModel(presetId);
@@ -179,7 +179,7 @@ describe('Prompt 5 — Professional Caption Studio, Presets & Parity Tests', () 
   // ─── Test Suite 4: Platform Safe Margins (TikTok / Reels / Shorts) ──
   describe('Requirement 4: Platform Safe Margins & Safe Zones', () => {
     test('default vertical margins for 9:16 portrait canvas avoid UI overlay collisions', () => {
-      const presets = ['minimal', 'cinematic', 'bold', 'karaoke', 'pop', 'podcast', 'educational', 'gaming'];
+      const presets = ['minimal', 'cinematic', 'hormozi', 'karaoke', 'pop', 'box', 'underline', 'neon'];
 
       for (const id of presets) {
         const model = getSharedStyleModel(id);
@@ -211,7 +211,7 @@ describe('Prompt 5 — Professional Caption Studio, Presets & Parity Tests', () 
   describe('Requirement 5: Comparison & Preset State Parity', () => {
     test('all 8 presets produce valid and distinct style configurations', () => {
       const generatedStyles = new Set();
-      const presets = ['minimal', 'cinematic', 'bold', 'karaoke', 'pop', 'podcast', 'educational', 'gaming'];
+      const presets = ['minimal', 'cinematic', 'hormozi', 'karaoke', 'pop', 'box', 'underline', 'neon'];
 
       for (const id of presets) {
         const preset = getCaptionPreset(id);

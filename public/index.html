@@ -175,6 +175,26 @@
               </div>
             </div>
 
+            <!-- 1c. Caption Style Dropdown -->
+            <div class="workspace-control-group">
+              <label class="workspace-label">🔤 CAPTION STYLE</label>
+              <div class="select-wrapper">
+                <select id="caption-style-select" class="gen-select">
+                  <option value="hormozi" selected>🔥 Hormozi Viral (Default)</option>
+                  <option value="neon">⚡ Neon Cyber</option>
+                  <option value="karaoke">🎤 Karaoke Fill</option>
+                  <option value="minimal">✨ Clean Minimal</option>
+                  <option value="box">📦 Solid Box</option>
+                  <option value="cinematic">🎬 Cinematic Serif</option>
+                  <option value="pop">💥 Animated Pop</option>
+                  <option value="underline">✍️ Accent Underline</option>
+                </select>
+              </div>
+              <div id="caption-style-preview" style="margin-top:6px;font-size:0.75rem;padding:6px 10px;background:rgba(255,255,255,0.03);border-radius:6px;color:var(--text-secondary)">
+                Preview: <span id="caption-style-preview-sample" style="font-weight:700;color:#FFE600">VIRAL HOOK</span> in action
+              </div>
+            </div>
+
             <!-- 2. Manual Timestamps -->
             <div class="workspace-control-group">
               <div class="ts-header">
@@ -733,14 +753,14 @@
 
               <!-- 8 Professional Presets Grid -->
               <div class="editor-presets-grid" id="editor-presets-grid">
-                <button type="button" class="preset-chip active" data-preset="bold">🔥 Bold Highlight</button>
-                <button type="button" class="preset-chip" data-preset="karaoke">🎤 Karaoke Word</button>
-                <button type="button" class="preset-chip" data-preset="pop">⚡ Animated Pop</button>
+                <button type="button" class="preset-chip active" data-preset="hormozi">🔥 Hormozi</button>
+                <button type="button" class="preset-chip" data-preset="neon">⚡ Neon</button>
+                <button type="button" class="preset-chip" data-preset="karaoke">🎤 Karaoke</button>
+                <button type="button" class="preset-chip" data-preset="minimal">✨ Minimal</button>
+                <button type="button" class="preset-chip" data-preset="box">📦 Box</button>
                 <button type="button" class="preset-chip" data-preset="cinematic">🎬 Cinematic</button>
-                <button type="button" class="preset-chip" data-preset="minimal">✨ Clean Minimal</button>
-                <button type="button" class="preset-chip" data-preset="podcast">🎙️ Podcast Sub</button>
-                <button type="button" class="preset-chip" data-preset="educational">📚 Educational</button>
-                <button type="button" class="preset-chip" data-preset="gaming">🎮 Gaming Neon</button>
+                <button type="button" class="preset-chip" data-preset="pop">💥 Pop</button>
+                <button type="button" class="preset-chip" data-preset="underline">✍️ Underline</button>
               </div>
 
               <!-- Typography Customization -->

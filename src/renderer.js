@@ -8,6 +8,7 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 import { generateSRT, generateASS } from "./subtitles.js";
+import { FONTS_DIR } from "./captions/fonts.js";
 import { spawnTracked } from "./process_manager.js";
 import { getExportProfile } from "./video/quality_profiles.js";
 import { verifyMediaFile } from "./video/verifier.js";
@@ -306,13 +307,10 @@ async function cutClip(sourceFile, outputPath, start, end, assPath, customData =
 
   // Step 2: Burn subtitles if captions enabled
   if (captionsEnabled && assPath && fs.existsSync(assPath) && fs.existsSync(tempRaw)) {
-    let subFilter;
-    if (IS_WINDOWS) {
-      const escapedPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
-      subFilter = `ass='${escapedPath}'`;
-    } else {
-      subFilter = `ass=${assPath}`;
-    }
+    const escapeFFmpegPath = (p) => p.replace(/\\/g, "/").replace(/:/g, "\\:");
+    const escapedAss = escapeFFmpegPath(assPath);
+    const escapedFonts = escapeFFmpegPath(FONTS_DIR);
+    const subFilter = `subtitles=filename='${escapedAss}':fontsdir='${escapedFonts}'`;
 
     try {
       await runFFmpegAsync([
