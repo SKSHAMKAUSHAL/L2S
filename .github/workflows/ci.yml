@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, version-2 ]
+  pull_request:
+    branches: [ main, version-2 ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Syntax Check
+        run: |
+          node --check src/server.js
+          node --check src/pipeline.js
+          node --check src/clip_selector.js
+          node --check src/segmenter.js
+          node --check src/scorer.js
+          node --check src/ranker.js
+          node --check src/downloader.js
+          node --check src/renderer.js
+
+      - name: Run Tests
+        run: npm test
+
+      - name: Security Audit
+        run: npm audit --audit-level=high

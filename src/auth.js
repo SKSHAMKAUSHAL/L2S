@@ -6,6 +6,33 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import { fileURLToPath } from 'url';
+
+// ─── Ensure .env is loaded ───────────────────
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = path.join(__dirname, '..');
+
+try {
+  const envPath = path.join(rootDir, '.env');
+  if (fs.existsSync(envPath)) {
+    const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#')) {
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx > 0) {
+          const key = trimmed.slice(0, eqIdx).trim();
+          let val = trimmed.slice(eqIdx + 1).trim();
+          if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+            val = val.slice(1, -1);
+          }
+          if (val && !process.env[key]) process.env[key] = val;
+        }
+      }
+    }
+  }
+} catch (e) { /* ignore */ }
 
 // ─── Token Storage ────────────────────────────
 const SKATE_DIR = path.join(os.homedir(), '.skate');
@@ -98,6 +125,10 @@ export async function exchangeYouTubeCode(code, redirectUri) {
   const clientId = process.env.YOUTUBE_CLIENT_ID;
   const clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
 
+  if (!clientId || !clientSecret) {
+    throw new Error('YouTube OAuth credentials not configured in .env');
+  }
+
   const res = await fetch(GOOGLE_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -117,17 +148,36 @@ export async function exchangeYouTubeCode(code, redirectUri) {
 
   const data = await res.json();
 
-  // Fetch user info
+  // Fetch YouTube channel name from YouTube Data API (preferred)
   let username = 'YouTube User';
   try {
-    const profileRes = await fetch(GOOGLE_USERINFO_URL, {
+    const channelRes = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', {
       headers: { Authorization: `Bearer ${data.access_token}` },
     });
-    if (profileRes.ok) {
-      const profile = await profileRes.json();
-      username = profile.name || profile.email || 'YouTube User';
+    if (channelRes.ok) {
+      const chData = await channelRes.json();
+      if (chData.items && chData.items.length > 0) {
+        username = chData.items[0].snippet?.title || username;
+      }
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    // Fallback to Google profile
+  }
+
+  // Fallback: fetch from Google userinfo if YouTube API didn't return a name
+  if (username === 'YouTube User') {
+    try {
+      const profileRes = await fetch(GOOGLE_USERINFO_URL, {
+        headers: { Authorization: `Bearer ${data.access_token}` },
+      });
+      if (profileRes.ok) {
+        const profile = await profileRes.json();
+        username = profile.name || profile.email || 'YouTube User';
+      }
+    } catch (e) {
+      // Keep default
+    }
+  }
 
   tokenCache.youtube = {
     accessToken: data.access_token,
@@ -152,6 +202,10 @@ export async function refreshYouTubeToken() {
   const clientId = process.env.YOUTUBE_CLIENT_ID;
   const clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
 
+  if (!clientId || !clientSecret) {
+    throw new Error('YouTube OAuth credentials missing in .env');
+  }
+
   const res = await fetch(GOOGLE_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -165,6 +219,12 @@ export async function refreshYouTubeToken() {
 
   if (!res.ok) {
     const err = await res.text();
+    // If token is revoked or expired, clear the stored tokens so UI prompts reconnect
+    if (err.includes('invalid_grant') || res.status === 400 || res.status === 401) {
+      delete tokenCache.youtube;
+      saveTokens(tokenCache);
+      throw new Error('YouTube token was revoked or expired. Please reconnect.');
+    }
     throw new Error(`YouTube token refresh failed: ${err}`);
   }
 
@@ -180,19 +240,19 @@ export async function refreshYouTubeToken() {
  */
 export async function getYouTubeToken() {
   const yt = tokenCache.youtube;
-  if (!yt?.accessToken) return null;
+  if (!yt?.accessToken && !yt?.refreshToken) return null;
 
-  // Refresh if expiring within 5 minutes
-  if (yt.expiresAt && Date.now() > yt.expiresAt - 300000) {
+  // Refresh if expiring within 5 minutes or if accessToken is missing
+  if (!yt.accessToken || (yt.expiresAt && Date.now() > yt.expiresAt - 300000)) {
     try {
       await refreshYouTubeToken();
     } catch (e) {
-      console.error('YouTube token refresh failed:', e.message);
+      console.warn('YouTube token refresh failed:', e.message);
       return null;
     }
   }
 
-  return yt.accessToken;
+  return tokenCache.youtube?.accessToken || null;
 }
 
 // ─── Instagram (Meta) OAuth 2.0 ──────────────
@@ -346,23 +406,38 @@ export function getInstagramToken() {
 
 /**
  * Get connection status for all platforms
+ * Checks real token validity (not just presence)
  */
 export function getConnectionStatus() {
   const yt = tokenCache.youtube;
   const ig = tokenCache.instagram;
 
+  // YouTube: connected if has valid access token or refresh token
+  // If refresh token is present but access token is missing/expired, it can still be refreshed
+  const ytHasToken = !!(yt?.accessToken || yt?.refreshToken);
+  const ytIsExpired = yt?.expiresAt && Date.now() > yt.expiresAt;
+  const ytConnected = ytHasToken && (!ytIsExpired || !!yt?.refreshToken);
+
+  // Instagram: connected if has valid access token and IG user ID
+  // Instagram tokens expire in 60 days (long-lived), so check expiration
+  const igHasToken = !!(ig?.accessToken && ig?.igUserId);
+  const igIsExpired = ig?.expiresAt && Date.now() > ig.expiresAt;
+  const igConnected = igHasToken && !igIsExpired;
+
   return {
     youtube: {
-      connected: !!(yt?.accessToken),
+      connected: ytConnected,
       username: yt?.username || null,
       expiresAt: yt?.expiresAt || null,
       connectedAt: yt?.connectedAt || null,
+      needsRefresh: ytHasToken && ytIsExpired && !!yt?.refreshToken,
     },
     instagram: {
-      connected: !!(ig?.accessToken && ig?.igUserId),
+      connected: igConnected,
       username: ig?.username || null,
       expiresAt: ig?.expiresAt || null,
       connectedAt: ig?.connectedAt || null,
+      expired: igIsExpired,
     },
   };
 }

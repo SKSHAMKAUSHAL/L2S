@@ -21,7 +21,11 @@ export async function checkDependencies() {
   } catch (e) {}
 
   try {
-    const res = await fetch('http://127.0.0.1:11434/api/tags');
+    const ollamaUrl = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(`${ollamaUrl}/api/tags`, { signal: controller.signal });
+    clearTimeout(timeout);
     if (res.ok) {
       status.ollama = { installed: true, version: 'Connected' };
     }

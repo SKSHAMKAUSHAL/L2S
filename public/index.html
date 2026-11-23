@@ -3,11 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>L2S — AI YouTube to Viral Shorts</title>
-  <meta name="description" content="Turn long-form YouTube videos into viral-ready vertical shorts. Paste a link, pick a genre, get clips. 100% local, free, private." />
+  <title>L2S — AI Long-Form to Viral Shorts</title>
+  <link rel="icon" href="data:," />
+  <meta name="description" content="Turn long-form YouTube videos into viral-ready vertical shorts. 100% local or cloud LPUs, private, zero bloat." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -19,13 +20,14 @@
   <div id="toast-container" class="toast-container"></div>
 
   <div class="app">
-    <!-- ─── Header ─────────────────────────────────── -->
+    <!-- ─── Ultra-Clean Header Navbar ─────────────────────────────────── -->
     <header id="app-header">
       <div class="header-inner">
-        <div class="logo" id="logo">
+        <!-- Logo / Brand -->
+        <a href="#hero-section" class="logo" id="logo" style="text-decoration:none">
           <div class="logo-icon">
-            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-              <rect width="32" height="32" rx="8" fill="url(#lg)"/>
+            <svg width="26" height="26" viewBox="0 0 32 32" fill="none">
+              <rect width="32" height="32" rx="9" fill="url(#lg)"/>
               <path d="M10 22L16 10L22 22" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
               <circle cx="16" cy="18" r="2" fill="white"/>
               <defs><linearGradient id="lg" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#8b5cf6"/><stop offset="1" stop-color="#06b6d4"/></linearGradient></defs>
@@ -33,26 +35,31 @@
           </div>
           <span class="logo-text">L2S</span>
           <span class="logo-badge">v2</span>
+        </a>
+
+        <!-- Right Action Cluster: Minimalist & Clean -->
+        <div class="header-actions">
+          <div class="connection-status-pill" title="Server Connection Status">
+            <span class="status-dot" id="connection-dot"></span>
+            <span class="status-text" id="connection-text">Connected</span>
+          </div>
+          <button type="button" id="btn-settings-trigger" class="btn-clean-settings" title="Settings, AI Models & Hardware">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            <span>Settings</span>
+          </button>
         </div>
-        <nav class="header-nav">
-          <span class="status-dot" id="connection-dot"></span>
-          <span class="status-text" id="connection-text">Connecting...</span>
-        </nav>
       </div>
     </header>
 
-    <!-- ─── Save Path Bar ─────────────────────────── -->
-    <div class="save-path-bar" id="save-path-bar">
-      <div class="save-path-inner">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M2 4.5A1.5 1.5 0 013.5 3h3.379a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6v5.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 11.5v-7z" stroke="currentColor" stroke-width="1.3"/>
-        </svg>
-        <span class="save-path-label">Save to:</span>
-        <input type="text" id="save-path-input" class="save-path-input" value="./output" placeholder="./output" spellcheck="false" />
-        <button type="button" id="save-path-set" class="save-path-btn" title="Set output path">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Set
-        </button>
+    <!-- Global Red Alert Banner for Missing API Keys / Critical Issues -->
+    <div id="global-alert-banner" class="global-alert-banner" style="display:none">
+      <div class="alert-content">
+        <span class="alert-icon">⚠️</span>
+        <span class="alert-message" id="global-alert-message">Active AI model API key is missing.</span>
+      </div>
+      <div class="alert-actions">
+        <button type="button" class="btn-alert-action" id="btn-open-settings-alert">Configure in Settings</button>
+        <button type="button" class="btn-alert-close" id="btn-close-alert" title="Dismiss">&times;</button>
       </div>
     </div>
 
@@ -60,11 +67,15 @@
       <!-- ─── Hero Section ───────────────────────────── -->
       <section class="hero-section" id="hero-section">
         <div class="hero-content">
+          <div class="hero-badge">
+            <span class="badge-dot"></span>
+            <span>AI Short-Form Video Generator</span>
+          </div>
           <h1 class="hero-title">
             Turn long-form videos into
             <span class="gradient-text">viral shorts</span>
           </h1>
-          <p class="hero-subtitle">Paste a YouTube link, pick a genre, get perfectly clipped vertical shorts with captions, descriptions & hashtags — powered by local AI, 100% free.</p>
+          <p class="hero-subtitle">Paste a YouTube link or local video, transcribe with Whisper, detect viral hooks with AI, customize pixel-perfect captions, and export high-bitrate shorts.</p>
 
           <!-- Input Form (compact, always visible) -->
           <form id="process-form" class="input-form">
@@ -75,9 +86,18 @@
                   <path d="M8.333 12.5V7.5l4.167 2.5-4.167 2.5Z" fill="currentColor"/>
                 </svg>
               </div>
-              <input type="text" id="source-input" placeholder="Paste YouTube URL here..." autocomplete="off" spellcheck="false" required />
+              <input type="text" id="source-input" placeholder="Paste YouTube URL or video path here..." autocomplete="off" spellcheck="false" required aria-label="YouTube URL input" />
             </div>
-            <p class="input-hint" id="input-hint">Supports YouTube, YouTube Shorts & local file paths • 100% local • No API keys</p>
+            <div class="save-path-bar" id="save-path-bar">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M2 4.5A1.5 1.5 0 013.5 3h3.379a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6v5.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 11.5v-7z" stroke="currentColor" stroke-width="1.3"/>
+              </svg>
+              <span>Save to:</span>
+              <input type="text" id="save-path-input" class="save-path-input" value="./output" placeholder="./output" spellcheck="false" aria-label="Output directory" />
+              <button type="button" id="save-path-set" class="save-path-btn" title="Set output path">Set</button>
+              <span id="save-path-status" class="save-path-status" style="font-size:0.75rem;margin-left:6px;color:#10b981;display:none">✓ Ready</span>
+            </div>
+            <p class="input-hint" id="input-hint">✨ Supports YouTube, Shorts & local MP4 files • Hardware accelerated • Local or Cloud AI</p>
           </form>
         </div>
       </section>
@@ -85,7 +105,7 @@
       <!-- ─── Workspace Section (Video Player + Controls Side-by-Side) ─── -->
       <section class="workspace-section" id="workspace-section">
         <div class="workspace-layout">
-          <!-- Left: Video Player -->
+          <!-- Left: Video Player & Placeholder -->
           <div class="workspace-player" id="workspace-player">
             <!-- Video Info Card (compact) -->
             <div class="video-info-card" id="video-info-card">
@@ -103,182 +123,292 @@
               <button class="video-info-close" id="video-info-close" title="Clear">&times;</button>
             </div>
 
-            <!-- YouTube Embed / Local Video Player -->
+            <!-- YouTube Embed / Local Video Player / Reference Placeholder Image -->
             <div class="workspace-video-container" id="workspace-video-container">
               <div class="workspace-video-placeholder" id="workspace-video-placeholder">
-                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" opacity="0.3">
-                  <path d="M24 44c11.046 0 20-8.954 20-20S35.046 4 24 4 4 12.954 4 24s8.954 20 20 20z" stroke="currentColor" stroke-width="2"/>
-                  <path d="M20 16v16l12-8-12-8z" fill="currentColor"/>
-                </svg>
-                <span>Paste a URL to preview the video</span>
+                <img src="image.png" alt="Video Preview" class="workspace-placeholder-img" id="placeholder-hero-img" />
+                <div class="placeholder-overlay-hint">
+                  <div class="placeholder-play-circle">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                      <polygon points="6 4 20 12 6 20 6 4"></polygon>
+                    </svg>
+                  </div>
+                  <span>Paste a video URL or local file to preview</span>
+                </div>
               </div>
-              <!-- YouTube iframe will be injected here -->
+              <!-- YouTube iframe -->
               <iframe id="workspace-yt-iframe" class="workspace-yt-iframe" style="display:none" allowfullscreen allow="autoplay; encrypted-media"></iframe>
-              <!-- Local video player (shown after download) -->
+              <!-- Local video player -->
               <video id="workspace-local-video" class="workspace-local-video" style="display:none" controls playsinline></video>
             </div>
           </div>
 
-          <!-- Right: Controls Panel -->
+          <!-- Right: Controls Panel (IMAGE 1 Target Order) -->
           <div class="workspace-controls" id="workspace-controls">
-            <!-- Genre Select -->
+            <!-- 1. Genre Select -->
             <div class="workspace-control-group">
-              <label class="workspace-label">🎯 Genre</label>
+              <label class="workspace-label">🌸 GENRE</label>
               <div class="select-wrapper">
-                <select id="genre-select">
-                  <option value="auto">🎯 Auto-detect Genre</option>
+                <select id="genre-select" class="gen-select">
+                  <option value="auto" selected>🎯 Auto-detect Genre</option>
                   <option value="funny">😂 Funny / Comedy</option>
                   <option value="educational">📚 Educational</option>
                   <option value="motivational">💪 Motivational</option>
                   <option value="tech">💻 Tech / Reviews</option>
                   <option value="gaming">🎮 Gaming</option>
-                  <option value="storytime">📖 Storytime</option>
-                  <option value="news">📰 News</option>
-                  <option value="music">🎵 Music</option>
-                  <option value="sports">⚽ Sports</option>
-                  <option value="vlog">📹 Vlog</option>
-                  <option value="cooking">🍳 Cooking</option>
+                  <option value="podcast">🎙️ Podcast / Interview</option>
+                  <option value="storytelling">📖 Storytelling</option>
                 </select>
               </div>
             </div>
 
-            <!-- Description -->
+            <!-- 2. Manual Timestamps -->
             <div class="workspace-control-group">
-              <label class="workspace-label">📝 Find clips about...</label>
-              <textarea class="adv-description-input" id="adv-description" placeholder='e.g. "Find the funniest roast moments" or "Best motivational advice about discipline"' rows="2"></textarea>
-            </div>
-
-            <!-- Timestamps (Scrollable) -->
-            <div class="workspace-control-group">
-              <label class="workspace-label">⏱️ Manual Timestamps</label>
-              <div class="timestamp-rows-container" id="timestamp-rows-container">
-                <div class="timestamp-rows" id="timestamp-rows">
-                  <div class="timestamp-row" data-ts-index="0">
-                    <input type="text" class="ts-start" placeholder="0:00" />
-                    <span class="timestamp-sep">→</span>
-                    <input type="text" class="ts-end" placeholder="0:30" />
-                    <button type="button" class="btn-remove-ts" title="Remove">×</button>
-                  </div>
-                </div>
+              <div class="ts-header">
+                <label class="workspace-label">🪆 MANUAL TIMESTAMPS</label>
               </div>
-              <button type="button" class="btn-add-ts" id="btn-add-ts">+ Add Timestamp</button>
+              <div class="ts-input-row">
+                <input type="text" id="ts-start" class="workspace-input ts-time-input" placeholder="0:00" />
+                <span class="ts-separator">→</span>
+                <input type="text" id="ts-end" class="workspace-input ts-time-input" placeholder="0:30" />
+                <button type="button" id="ts-add-btn" class="btn-add-ts-outline">+ Add Timestamp</button>
+              </div>
+              <div class="ts-chip-list" id="ts-chip-list"></div>
             </div>
 
-            <!-- Clip Mode -->
+            <!-- 3. How To Use These (Radio Pills) -->
             <div class="workspace-control-group">
-              <label class="workspace-label">🎯 How to use these</label>
-              <div class="clip-mode-toggle">
-                <label><input type="radio" name="clip-mode" value="add" checked /> Add to AI clips</label>
-                <label><input type="radio" name="clip-mode" value="only" /> Only these clips</label>
+              <label class="workspace-label">🌸 HOW TO USE THESE</label>
+              <div class="how-to-use-pills" id="how-to-use-pills">
+                <label class="how-pill active" id="pill-mode-add">
+                  <input type="radio" name="clip-mode" value="add" checked />
+                  <span class="pill-radio-dot"></span>
+                  <span>Add to AI clips</span>
+                </label>
+                <label class="how-pill" id="pill-mode-only">
+                  <input type="radio" name="clip-mode" value="only" />
+                  <span class="pill-radio-dot"></span>
+                  <span>Only these clips</span>
+                </label>
+              </div>
+              <!-- Hidden toggle for test contract compatibility -->
+              <input type="checkbox" id="ts-only-toggle" style="display:none" />
+            </div>
+
+            <!-- 4. Number of Clips -->
+            <div class="workspace-control-group" id="clip-count-group">
+              <label class="workspace-label">✂️ NUMBER OF CLIPS</label>
+              <div class="gen-chip-group" id="clip-count-chips">
+                <button type="button" class="gen-chip active" data-count="auto">Auto</button>
+                <button type="button" class="gen-chip" data-count="3">3</button>
+                <button type="button" class="gen-chip" data-count="5">5</button>
+                <button type="button" class="gen-chip" data-count="10">10</button>
+                <button type="button" class="gen-chip" data-count="15">15</button>
+                <button type="button" class="gen-chip" data-count="20">20</button>
+                <button type="button" class="gen-chip custom-chip" id="btn-custom-clip-count" data-count="custom">Custom #</button>
+              </div>
+              <div id="custom-clip-count-input-wrap" style="display:none;margin-top:6px">
+                <input type="number" id="custom-clip-count-input" class="workspace-input" min="1" max="50" placeholder="Enter custom clip count (e.g. 7)" />
+              </div>
+              <!-- Hidden select for form / programmatic fallback -->
+              <select id="clip-count-select" style="display:none">
+                <option value="auto" selected>auto</option>
+                <option value="3">3</option>
+                <option value="5">5</option>
+                <option value="8">8</option>
+                <option value="10">10</option>
+                <option value="15">15</option>
+                <option value="20">20</option>
+              </select>
+            </div>
+
+            <!-- 5. Output Ratio & Zoom -->
+            <div class="workspace-control-group">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+                <label class="workspace-label">📐 OUTPUT RATIO &amp; ZOOM</label>
+                <span id="current-ratio-display" style="font-size:0.75rem;font-weight:700;color:var(--accent-purple)">9:16</span>
+              </div>
+              <div class="gen-chip-group" id="ratio-chips">
+                <button type="button" class="gen-chip active" data-ratio="9:16">9:16</button>
+                <button type="button" class="gen-chip" data-ratio="1:1">1:1</button>
+                <button type="button" class="gen-chip" data-ratio="4:5">4:5</button>
+                <button type="button" class="gen-chip" data-ratio="16:9">16:9</button>
+              </div>
+              <div class="zoom-slider-row">
+                <span class="zoom-slider-label">Zoom:</span>
+                <input type="range" id="pre-gen-zoom-slider" min="0.1" max="3.0" step="0.1" value="1.0" class="gen-range-slider" />
+                <span id="pre-gen-zoom-val" class="zoom-slider-val">1.0x</span>
+              </div>
+              <!-- Hidden select for programmatic fallback -->
+              <select id="pre-gen-ratio-select" style="display:none">
+                <option value="9:16" selected>9:16</option>
+                <option value="1:1">1:1</option>
+                <option value="4:5">4:5</option>
+                <option value="16:9">16:9</option>
+              </select>
+            </div>
+
+            <!-- 6. Source Download Quality -->
+            <div class="workspace-control-group">
+              <label class="workspace-label">📥 SOURCE DOWNLOAD QUALITY</label>
+              <div class="gen-chip-group" id="source-quality-chips">
+                <button type="button" class="gen-chip active" data-quality="best">★ Best (4K)</button>
+                <button type="button" class="gen-chip" data-quality="1080p">💎 1080p</button>
+                <button type="button" class="gen-chip" data-quality="720p">⚡ 720p</button>
+                <button type="button" class="gen-chip" data-quality="audio">🎵 Audio</button>
+              </div>
+              <!-- Hidden select for programmatic fallback -->
+              <select id="quality-select" style="display:none">
+                <option value="best" selected>best</option>
+                <option value="1080p">1080p</option>
+                <option value="720p">720p</option>
+                <option value="480p">480p</option>
+                <option value="audio">audio</option>
+              </select>
+              <div id="source-resolution-info" class="source-res-pill" style="display:none;margin-top:6px">
+                <span id="source-res-text">Detected: 1080p Full HD @ 30fps</span>
               </div>
             </div>
 
-            <!-- Generate / Stop Buttons -->
+            <!-- 7. Export Encoding Profile -->
+            <div class="workspace-control-group">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+                <label class="workspace-label">🎬 EXPORT ENCODING PROFILE</label>
+                <span id="export-profile-badge" style="font-size:0.72rem;color:var(--accent-cyan);font-weight:600">NVENC GPU</span>
+              </div>
+              <div class="export-profile-chips" id="export-profile-chips">
+                <button type="button" class="export-chip" data-profile="fast" title="Fast Draft: High speed preview, 128k audio">⚡ Fast</button>
+                <button type="button" class="export-chip active" data-profile="balanced" title="Balanced (Recommended): Crisp 1080x1920, 192k audio">⚖️ Balanced</button>
+                <button type="button" class="export-chip" data-profile="high" title="High Quality: Pristine for YouTube Shorts & Reels, 256k audio">💎 High Q</button>
+                <button type="button" class="export-chip" data-profile="max" title="Maximum Quality: Studio master quality, 320k audio">👑 Max Q</button>
+              </div>
+              <div class="export-profile-hint" id="export-profile-hint">
+                ⚖️ Balanced: Optimal clarity & render speed (H.264 CQ 22, 192k AAC audio, fast-start)
+              </div>
+            </div>
+
+            <!-- Optional Search Filter -->
+            <div class="workspace-control-group" style="display:none">
+              <input type="text" id="desc-input" class="workspace-input" placeholder='Search filter' autocomplete="off" />
+            </div>
+
+            <!-- 8. Action Button (+ Generate Clips / Stop) -->
             <div class="workspace-actions">
-              <button type="button" id="generate-btn" class="btn-primary btn-generate">
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3.75 9h10.5M9 3.75v10.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                <span>Generate Clips</span>
+              <button type="button" id="generate-btn" class="btn-primary btn-generate-hero">
+                <span class="btn-gen-icon">+</span>
+                <span class="btn-gen-text">Generate Clips</span>
               </button>
-              <button type="button" id="stop-btn" class="btn-danger btn-stop">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor"/></svg>
-                <span>Stop</span>
+              <button type="button" id="stop-btn" class="btn-stop-hero" style="display:none">
+                <span class="stop-icon">■</span>
+                <span class="stop-text">Stop Generation</span>
               </button>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- ─── Pipeline Progress ──────────────────────── -->
-      <section class="pipeline-section" id="pipeline-section">
-        <div class="section-header">
-          <h2>
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="vertical-align:-3px;margin-right:6px"><path d="M10 18.333a8.333 8.333 0 100-16.666 8.333 8.333 0 000 16.666z" stroke="currentColor" stroke-width="1.5"/><path d="M10 5v5l3.333 1.667" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-            Pipeline Progress
-          </h2>
-          <span class="pipeline-timer" id="pipeline-timer">00:00</span>
+      <!-- ─── Progress Section (IMAGE 3 Target Pipeline & Terminal) ─── -->
+      <section class="progress-section" id="progress-section">
+        <!-- Pipeline Header & Live Timer -->
+        <div class="pipeline-header-bar">
+          <div class="pipeline-title-wrap">
+            <span class="pipeline-clock-icon">🕒</span>
+            <h3 class="pipeline-title">Pipeline Progress</h3>
+          </div>
+          <div class="pipeline-timer-badge" id="pipeline-timer-badge">
+            <span class="timer-dot"></span>
+            <span id="pipeline-timer">00:00</span>
+          </div>
         </div>
 
-        <div class="pipeline-steps" id="pipeline-steps">
-          <div class="step" data-step="download" id="step-download">
-            <div class="step-indicator">
-              <div class="step-icon">
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 2.25v9m0 0l3-3m-3 3l-3-3M3.75 12.75v1.5a1.5 1.5 0 001.5 1.5h7.5a1.5 1.5 0 001.5-1.5v-1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </div>
-              <div class="step-pulse"></div>
+        <!-- 5 Horizontal Connected Steps -->
+        <div class="steps-container-v2" id="steps-container">
+          <!-- Step 1: Download -->
+          <div class="step step-card" data-step="download">
+            <div class="step-icon-wrap">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
             </div>
-            <div class="step-content">
-              <span class="step-label">Download</span>
+            <div class="step-meta">
+              <span class="step-title">Download</span>
               <span class="step-status">WAITING</span>
             </div>
           </div>
-          <div class="step-connector"></div>
+          <div class="step-divider-line"></div>
 
-          <div class="step" data-step="transcribe" id="step-transcribe">
-            <div class="step-indicator">
-              <div class="step-icon">
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 1.5v6m0 0a3 3 0 003-3M9 7.5a3 3 0 01-3-3M5.25 10.5A3.75 3.75 0 009 14.25a3.75 3.75 0 003.75-3.75M9 14.25V16.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </div>
-              <div class="step-pulse"></div>
+          <!-- Step 2: Transcribe -->
+          <div class="step step-card" data-step="transcribe">
+            <div class="step-icon-wrap">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
             </div>
-            <div class="step-content">
-              <span class="step-label">Transcribe</span>
+            <div class="step-meta">
+              <span class="step-title">Transcribe</span>
               <span class="step-status">WAITING</span>
             </div>
           </div>
-          <div class="step-connector"></div>
+          <div class="step-divider-line"></div>
 
-          <div class="step" data-step="analyze" id="step-analyze">
-            <div class="step-indicator">
-              <div class="step-icon">
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M6.75 9.75l1.5 1.5 3-3M9 16.5a7.5 7.5 0 110-15 7.5 7.5 0 010 15z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </div>
-              <div class="step-pulse"></div>
+          <!-- Step 3: Analyze & Score -->
+          <div class="step step-card" data-step="analyze">
+            <div class="step-icon-wrap">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="m4.93 4.93 4.24 4.24"></path><path d="m14.83 9.17 4.24-4.24"></path><path d="m14.83 14.83 4.24 4.24"></path><path d="m9.17 14.83-4.24 4.24"></path></svg>
             </div>
-            <div class="step-content">
-              <span class="step-label">Analyze & Score</span>
+            <div class="step-meta">
+              <span class="step-title">Analyze &amp; Score</span>
               <span class="step-status">WAITING</span>
             </div>
           </div>
-          <div class="step-connector"></div>
+          <div class="step-divider-line"></div>
 
-          <div class="step" data-step="rank" id="step-rank">
-            <div class="step-indicator">
-              <div class="step-icon">
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 1.5l2.318 4.696 5.182.754-3.75 3.654.885 5.163L9 13.404l-4.635 2.363.885-5.163L1.5 6.95l5.182-.754L9 1.5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </div>
-              <div class="step-pulse"></div>
+          <!-- Step 4: AI Rank -->
+          <div class="step step-card" data-step="rank">
+            <div class="step-icon-wrap">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
             </div>
-            <div class="step-content">
-              <span class="step-label">AI Rank</span>
+            <div class="step-meta">
+              <span class="step-title">AI Rank</span>
               <span class="step-status">WAITING</span>
             </div>
           </div>
-          <div class="step-connector"></div>
+          <div class="step-divider-line"></div>
 
-          <div class="step" data-step="render" id="step-render">
-            <div class="step-indicator">
-              <div class="step-icon">
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2.25 9h1.5l1.5-4.5L7.5 13.5l2.25-6.75L12 12l1.5-3h2.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </div>
-              <div class="step-pulse"></div>
+          <!-- Step 5: Render Clips -->
+          <div class="step step-card" data-step="render">
+            <div class="step-icon-wrap">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
             </div>
-            <div class="step-content">
-              <span class="step-label">Render Clips</span>
+            <div class="step-meta">
+              <span class="step-title">Render Clips</span>
               <span class="step-status">WAITING</span>
             </div>
           </div>
         </div>
 
-        <!-- Terminal Log -->
-        <div class="terminal-card">
-          <div class="terminal-header">
-            <div class="terminal-dots"><span></span><span></span><span></span></div>
+        <!-- Error Panel -->
+        <div class="error-panel" id="error-panel" style="display:none">
+          <div class="error-panel-header">
+            <div class="error-panel-icon">⚠️</div>
+            <div class="error-panel-title" id="error-panel-title">Pipeline Error</div>
+            <button class="error-panel-close" id="error-panel-close">×</button>
+          </div>
+          <div class="error-panel-msg" id="error-panel-msg"></div>
+          <div class="error-panel-fix" id="error-panel-fix"></div>
+          <div class="error-panel-actions" id="error-panel-actions"></div>
+        </div>
+
+        <!-- Terminal Log Card with macOS Controls (IMAGE 3) -->
+        <div class="terminal-card-v2">
+          <div class="terminal-bar">
+            <div class="mac-traffic-lights">
+              <span class="mac-dot mac-red"></span>
+              <span class="mac-dot mac-yellow"></span>
+              <span class="mac-dot mac-green"></span>
+            </div>
             <span class="terminal-title">Pipeline Output</span>
-            <button id="clear-terminal" class="terminal-clear" title="Clear logs">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10.5 3.5l-7 7M3.5 3.5l7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <button id="clear-terminal" class="terminal-btn-clear" title="Clear logs">
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M10.5 3.5l-7 7M3.5 3.5l7 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
             </button>
           </div>
-          <div class="terminal" id="terminal">
+          <div class="terminal-v2" id="terminal">
             <div class="terminal-line terminal-muted">Waiting for pipeline to start...</div>
           </div>
         </div>
@@ -292,7 +422,7 @@
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="vertical-align:-3px;margin-right:6px"><path d="M4.167 2.5h11.666A1.667 1.667 0 0117.5 4.167v11.666a1.667 1.667 0 01-1.667 1.667H4.167A1.667 1.667 0 012.5 15.833V4.167A1.667 1.667 0 014.167 2.5z" stroke="currentColor" stroke-width="1.5"/><path d="M8.333 12.5V7.5l4.167 2.5-4.167 2.5z" fill="currentColor"/></svg>
               Review Clips
             </h2>
-            <p class="section-subtitle">AI found these viral moments. Select the ones you want to render into shorts.</p>
+            <p class="section-subtitle">AI found these viral moments. Select and customize before final rendering.</p>
           </div>
           <div class="review-actions">
             <button id="select-all-btn" class="btn-secondary btn-sm">Select All</button>
@@ -314,7 +444,7 @@
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="vertical-align:-3px;margin-right:6px"><path d="M16.667 8.333v6.334A1.667 1.667 0 0115 16.333H5A1.667 1.667 0 013.333 14.667V5.333A1.667 1.667 0 015 3.667h6.333" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M6.667 10l2.5 2.5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
               Your Viral Shorts
             </h2>
-            <p class="section-subtitle">Ready to upload! Copy captions & hashtags or download clips.</p>
+            <p class="section-subtitle">Ready to publish! Copy viral captions or upload directly to YouTube Shorts & Instagram Reels.</p>
           </div>
           <div class="results-actions">
             <button id="download-all-btn" class="btn-primary btn-sm">
@@ -324,292 +454,541 @@
             <button id="new-video-btn" class="btn-secondary btn-sm">+ New Video</button>
           </div>
         </div>
+
+        <!-- AI Virality & Optimal Posting Guide (Unified Creator Intelligence) -->
+        <div class="virality-tips-card" id="virality-tips-card" style="margin-bottom:24px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px 18px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" id="virality-tips-toggle" role="button" tabindex="0">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:1.25rem">🚀</span>
+              <div>
+                <div style="font-weight:600;font-size:0.88rem;color:var(--text-primary)">AI Virality & Optimal Posting Guide</div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">Peak engagement windows, hook rules, and genre tips</div>
+              </div>
+            </div>
+            <span id="virality-tips-chevron" style="color:var(--text-muted);font-size:0.85rem;transition:transform 0.2s">▼</span>
+          </div>
+          <div id="virality-tips-content" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.06)">
+            <!-- Dynamically populated via /api/social/recommendations -->
+          </div>
+        </div>
+
         <div id="results-list" class="results-list"></div>
-      </section>
-
-      <!-- ─── Publish Section ────────────────────────── -->
-      <section class="publish-section" id="publish-section">
-        <div class="section-header">
-          <div>
-            <h2>
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="vertical-align:-3px;margin-right:6px"><path d="M14 2L6.5 9.5M14 2l-4.5 12-2-4.5L3 7l11-5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              Publish to Social Media
-            </h2>
-            <p class="section-subtitle">Connect your accounts and auto-publish clips with optimized captions, hashtags & settings.</p>
-          </div>
-        </div>
-
-        <!-- Setup Guide (Expandable) -->
-        <div class="setup-guide" id="setup-guide">
-          <button type="button" class="setup-guide-toggle" id="setup-guide-toggle">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3.5 5.25L7 8.75L10.5 5.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span>🔑 Setup Guide — How to get OAuth credentials</span>
-          </button>
-          <div class="setup-guide-panel" id="setup-guide-panel">
-            <div class="setup-guide-inner">
-              <div class="setup-platform-guide">
-                <div class="setup-platform-badge youtube-badge">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M22.54 6.42a2.78 2.78 0 00-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 00-1.94 2A29.94 29.94 0 001 12a29.94 29.94 0 00.46 5.58 2.78 2.78 0 001.94 2c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 001.94-2A29.94 29.94 0 0023 12a29.94 29.94 0 00-.46-5.58z" stroke="currentColor" stroke-width="1.5"/><path d="M9.75 15.02l5.75-3.27-5.75-3.27v6.54z" fill="currentColor"/></svg>
-                  YouTube Shorts
-                </div>
-                <ol class="setup-steps">
-                  <li>Go to <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a></li>
-                  <li>Create a project → Enable <strong>YouTube Data API v3</strong></li>
-                  <li>Go to Credentials → Create <strong>OAuth 2.0 Client ID</strong> (Web Application)</li>
-                  <li>Add redirect URI: <code>http://localhost:3000/api/auth/callback/youtube</code></li>
-                  <li>Copy Client ID & Secret into your <code>.env</code> file</li>
-                </ol>
-              </div>
-              <div class="setup-platform-guide">
-                <div class="setup-platform-badge instagram-badge">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="5" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.5"/><circle cx="17.5" cy="6.5" r="1.5" fill="currentColor"/></svg>
-                  Instagram Reels
-                </div>
-                <ol class="setup-steps">
-                  <li>Go to <a href="https://developers.facebook.com/" target="_blank" rel="noopener">Meta Developer Portal</a></li>
-                  <li>Create an App → Add <strong>Instagram Graph API</strong> product</li>
-                  <li>Add redirect URI: <code>http://localhost:3000/api/auth/callback/instagram</code></li>
-                  <li>Copy App ID & Secret into your <code>.env</code> file</li>
-                  <li>⚠️ Requires an Instagram <strong>Business/Creator</strong> account linked to a Facebook Page</li>
-                </ol>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Platform Cards -->
-        <div class="publish-platforms" id="publish-platforms">
-          <!-- Instagram Card -->
-          <div class="platform-card" data-platform="instagram" id="platform-instagram">
-            <div class="platform-card-header">
-              <div class="platform-icon instagram-icon">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="5" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.5"/><circle cx="17.5" cy="6.5" r="1.5" fill="currentColor"/></svg>
-              </div>
-              <div class="platform-info">
-                <span class="platform-name">Instagram Reels</span>
-                <span class="platform-status" id="ig-status">Not Connected</span>
-              </div>
-              <button class="btn-connect" id="btn-connect-ig">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                Connect
-              </button>
-            </div>
-            <div class="platform-workflow" id="ig-workflow">
-              <div class="workflow-field">
-                <div class="workflow-label-row">
-                  <label>Caption Template</label>
-                  <button class="btn-autofill" id="btn-autofill-ig-caption" title="Auto-fill with AI content">🤖 AI Fill</button>
-                </div>
-                <textarea id="ig-caption" placeholder="{caption}&#10;&#10;{hashtags}&#10;&#10;🔥 Follow for more!" rows="3"></textarea>
-              </div>
-              <div class="workflow-field">
-                <div class="workflow-label-row">
-                  <label>Extra Hashtags</label>
-                  <button class="btn-autofill" id="btn-autofill-ig-tags" title="Auto-fill with AI hashtags">🤖 AI Fill</button>
-                </div>
-                <input type="text" id="ig-hashtags" placeholder="#reels #instagram #viral" />
-              </div>
-            </div>
-          </div>
-
-          <!-- YouTube Card -->
-          <div class="platform-card" data-platform="youtube" id="platform-youtube">
-            <div class="platform-card-header">
-              <div class="platform-icon youtube-icon">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M22.54 6.42a2.78 2.78 0 00-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 00-1.94 2A29.94 29.94 0 001 12a29.94 29.94 0 00.46 5.58 2.78 2.78 0 001.94 2c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 001.94-2A29.94 29.94 0 0023 12a29.94 29.94 0 00-.46-5.58z" stroke="currentColor" stroke-width="1.5"/><path d="M9.75 15.02l5.75-3.27-5.75-3.27v6.54z" fill="currentColor"/></svg>
-              </div>
-              <div class="platform-info">
-                <span class="platform-name">YouTube Shorts</span>
-                <span class="platform-status" id="yt-status">Not Connected</span>
-              </div>
-              <button class="btn-connect" id="btn-connect-yt">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                Connect
-              </button>
-            </div>
-            <div class="platform-workflow" id="yt-workflow">
-              <div class="workflow-field">
-                <div class="workflow-label-row">
-                  <label>Title Template</label>
-                  <button class="btn-autofill" id="btn-autofill-yt-title" title="Auto-fill with AI title">🤖 AI Fill</button>
-                </div>
-                <input type="text" id="yt-title" placeholder="{title} #Shorts" />
-              </div>
-              <div class="workflow-field">
-                <div class="workflow-label-row">
-                  <label>Description Template</label>
-                  <button class="btn-autofill" id="btn-autofill-yt-desc" title="Auto-fill with AI description">🤖 AI Fill</button>
-                </div>
-                <textarea id="yt-description" placeholder="{description}&#10;&#10;{hashtags}&#10;&#10;📌 Subscribe for more content!" rows="3"></textarea>
-              </div>
-              <div class="workflow-field">
-                <div class="workflow-label-row">
-                  <label>Tags</label>
-                  <button class="btn-autofill" id="btn-autofill-yt-tags" title="Auto-fill with AI tags">🤖 AI Fill</button>
-                </div>
-                <input type="text" id="yt-tags" placeholder="shorts, viral, trending" />
-              </div>
-              <div class="workflow-row">
-                <div class="workflow-field">
-                  <label>Audience</label>
-                  <select id="yt-audience">
-                    <option value="all">All Ages</option>
-                    <option value="kids">Made for Kids</option>
-                    <option value="adult">Not Made for Kids</option>
-                  </select>
-                </div>
-                <div class="workflow-field">
-                  <label>Visibility</label>
-                  <select id="yt-visibility">
-                    <option value="public">Public</option>
-                    <option value="unlisted">Unlisted</option>
-                    <option value="private">Private</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Publish Progress -->
-        <div class="publish-progress" id="publish-progress"></div>
-
-        <!-- Publish Button -->
-        <div class="publish-actions">
-          <button class="btn-primary btn-publish" id="btn-publish" disabled>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 2L6.5 9.5M14 2l-4.5 12-2-4.5L3 7l11-5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Publish Selected Clips
-          </button>
-        </div>
-      </section>
-
-      <!-- ─── System Status ──────────────────────────── -->
-      <section class="status-section" id="status-section">
-        <div class="section-header">
-          <h2>System Status</h2>
-          <button id="recheck-deps" class="btn-secondary btn-sm">Re-check</button>
-        </div>
-        <div class="status-grid" id="status-grid">
-          <div class="status-card loading">
-            <span class="status-card-label">Checking dependencies...</span>
-          </div>
-        </div>
-        <p class="status-hint" id="status-hint"></p>
       </section>
     </main>
 
-    <!-- ─── Editor Modal ─────────────────────────────── -->
-    <div class="modal-overlay" id="editor-modal">
-      <div class="modal-content">
+    <!-- ─── System & AI Settings Modal ─────────────────────────────── -->
+    <div class="modal-overlay" id="settings-modal">
+      <div class="modal-content settings-modal-content">
         <div class="modal-header">
-          <h3 class="modal-title">Edit Clip</h3>
-          <button class="modal-close" id="editor-close">&times;</button>
-        </div>
-        <div class="modal-body">
-          <div class="editor-canvas-wrapper">
-            <!-- Aspect Ratio Selector -->
-            <div class="ratio-selector" id="ratio-selector">
-              <button class="ratio-btn" data-ratio="9:16" title="Vertical (TikTok, Reels)">9:16</button>
-              <button class="ratio-btn" data-ratio="16:9" title="Horizontal (YouTube)">16:9</button>
-              <button class="ratio-btn active" data-ratio="1:1" title="Square (Instagram)">1:1</button>
-            </div>
-            <div class="editor-canvas-container" id="editor-canvas-container">
-              <video id="editor-video" playsinline loop></video>
-            </div>
-            <!-- Volume Control -->
-            <div class="editor-volume-bar">
-              <button class="volume-toggle" id="volume-toggle" title="Toggle Mute">
-                <svg class="vol-icon-on" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2.5L4.5 5.5H2v5h2.5L8 13.5V2.5z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 5.5a3.5 3.5 0 010 5M12.5 3.5a6 6 0 010 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-                <svg class="vol-icon-off" width="16" height="16" viewBox="0 0 16 16" fill="none" style="display:none"><path d="M8 2.5L4.5 5.5H2v5h2.5L8 13.5V2.5z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 6l3.5 4M14.5 6L11 10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-              </button>
-              <input type="range" id="volume-slider" min="0" max="1" value="0.7" step="0.05" class="volume-slider" />
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:1.4rem">⚙️</span>
+            <div>
+              <h3 class="modal-title">System & AI Settings</h3>
+              <p style="font-size:0.75rem;color:var(--text-muted);margin:0">Configure AI models, API keys, hardware diagnostics & accounts</p>
             </div>
           </div>
-          <div class="editor-controls">
-            <div class="control-section-label">✂️ Trim</div>
-            <div class="control-group">
-              <label>
-                <span>Clip Length</span>
-                <span id="editor-val-length">0s</span>
-              </label>
+          <button class="modal-close" id="settings-close">&times;</button>
+        </div>
+
+        <div class="modal-body settings-modal-body">
+          <!-- Active Model Switcher -->
+          <div class="settings-card">
+            <h4 class="settings-card-title">🤖 AI Reasoning Engine</h4>
+            <div class="form-group">
+              <label for="settings-llm-select">Active AI Provider</label>
+              <select id="settings-llm-select" class="customizer-select">
+                <option value="ollama">Ollama (100% Local GPU/CPU — Recommended)</option>
+                <option value="groq">Groq Cloud (Ultra-Fast LPUs)</option>
+              </select>
+            </div>
+
+            <!-- Model Switcher (Dynamic per Provider) -->
+            <div class="form-group" style="margin-top:12px">
+              <label for="settings-model-select">Selected AI Model</label>
+              <div style="display:flex;gap:8px">
+                <select id="settings-model-select" class="customizer-select" style="flex:1">
+                  <option value="">Loading models...</option>
+                </select>
+                <button type="button" id="btn-save-model" class="btn-secondary btn-sm" title="Apply model">Apply</button>
+              </div>
+              <p id="settings-model-hint" style="font-size:0.75rem;color:var(--text-muted);margin:4px 0 0 0">
+                Choose the model for the active AI provider.
+              </p>
+            </div>
+
+            <!-- API Key Input Field (shown for Groq) -->
+            <div id="settings-api-key-group" class="form-group" style="display:none;margin-top:12px">
+              <label id="settings-api-key-label" for="settings-api-key-input">Groq Cloud API Key</label>
+              <div style="display:flex;gap:8px">
+                <input type="password" id="settings-api-key-input" class="workspace-input" placeholder="gsk_..." />
+                <button type="button" id="btn-save-api-key" class="btn-primary btn-sm">Save Key</button>
+              </div>
+              <div id="settings-api-key-warn" class="settings-red-alert" style="display:none">
+                ⚠️ API key missing! Groq will fail without a valid key. Ollama is disabled for this provider.
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-top:12px">
+              <label for="settings-stt-select">Speech-to-Text (STT) Provider</label>
+              <select id="settings-stt-select" class="customizer-select">
+                <option value="local_whisper">Local faster-whisper (Offline & Private)</option>
+                <option value="groq_whisper">Groq Whisper (whisper-large-v3-turbo)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Hardware Diagnostics Card -->
+          <div class="settings-card">
+            <h4 class="settings-card-title">🖥️ Auto-Detected Hardware</h4>
+            <div class="hardware-info-grid" id="settings-hw-info">
+              <div class="hw-spec-row">
+                <span class="hw-spec-name">GPU:</span>
+                <span class="hw-spec-val" id="hw-gpu-name">Detecting...</span>
+              </div>
+              <div class="hw-spec-row">
+                <span class="hw-spec-name">VRAM:</span>
+                <span class="hw-spec-val" id="hw-gpu-vram">--</span>
+              </div>
+              <div class="hw-spec-row">
+                <span class="hw-spec-name">System RAM:</span>
+                <span class="hw-spec-val" id="hw-ram-total">--</span>
+              </div>
+              <div class="hw-spec-row">
+                <span class="hw-spec-name">CPU:</span>
+                <span class="hw-spec-val" id="hw-cpu-model">--</span>
+              </div>
+              <div class="hw-spec-row hw-highlight-row">
+                <span class="hw-spec-name">Recommended Model:</span>
+                <span class="hw-spec-val" id="hw-recommended-model">--</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Connected Social Accounts -->
+          <div class="settings-card">
+            <h4 class="settings-card-title">👤 Social Accounts (Direct 1-Click Upload)</h4>
+            <div class="account-connect-cards">
+              <div class="account-row-card" id="settings-row-yt">
+                <div style="display:flex;align-items:center;gap:12px">
+                  <div class="platform-icon youtube-icon" style="width:34px;height:34px">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22.54 6.42a2.78 2.78 0 00-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 00-1.94 2A29.94 29.94 0 001 12a29.94 29.94 0 00.46 5.58 2.78 2.78 0 001.94 2c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 001.94-2A29.94 29.94 0 0023 12a29.94 29.94 0 00-.46-5.58z" stroke="currentColor" stroke-width="1.5"/><path d="M9.75 15.02l5.75-3.27-5.75-3.27v6.54z" fill="currentColor"/></svg>
+                  </div>
+                  <div>
+                    <div style="font-weight:600;font-size:0.86rem">YouTube Shorts</div>
+                    <div id="settings-yt-status" style="font-size:0.75rem;color:var(--text-muted)">Not Connected</div>
+                  </div>
+                </div>
+                <button type="button" id="settings-btn-yt" class="btn-sm btn-primary">Connect</button>
+              </div>
+
+              <div class="account-row-card" id="settings-row-ig" style="margin-top:8px">
+                <div style="display:flex;align-items:center;gap:12px">
+                  <div class="platform-icon instagram-icon" style="width:34px;height:34px">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="5" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.5"/><circle cx="17.5" cy="6.5" r="1.5" fill="currentColor"/></svg>
+                  </div>
+                  <div>
+                    <div style="font-weight:600;font-size:0.86rem">Instagram Reels</div>
+                    <div id="settings-ig-status" style="font-size:0.75rem;color:var(--text-muted)">Not Connected</div>
+                  </div>
+                </div>
+                <button type="button" id="settings-btn-ig" class="btn-sm btn-primary">Connect</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cache Cleaner -->
+          <div class="settings-card" style="display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <div style="font-weight:600;font-size:0.88rem">🧹 Storage Cache</div>
+              <div style="font-size:0.76rem;color:var(--text-muted)">Free downloaded temp media and intermediate cache</div>
+            </div>
+            <button type="button" id="settings-btn-clean" class="btn-secondary btn-sm">Clean Temp Space</button>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn-primary" id="settings-done-btn">Save & Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Clip Studio & Caption Customizer (Whiteboard Modal) ─── -->
+    <div class="modal-overlay" id="editor-modal">
+      <div class="modal-content studio-modal-content">
+        <div class="modal-header">
+          <div>
+            <h3 class="modal-title">🎨 Clip Studio & Caption Customizer</h3>
+            <p style="font-size:0.76rem;color:var(--text-muted);margin:0">Live 9:16 preview, pixel-accurate ASS typography, karaoke animations, and mobile safe areas</p>
+          </div>
+          <button class="modal-close" id="editor-close">&times;</button>
+        </div>
+
+        <div class="modal-body studio-modal-body">
+          <!-- Left: Live Stage Viewport -->
+          <div class="studio-stage-panel">
+            <!-- View Mode Switch: Single vs Side-by-Side Comparison -->
+            <div class="studio-view-toggle-wrap">
+              <div class="view-mode-pill-toggle" id="editor-view-mode-toggle">
+                <button type="button" class="view-mode-btn active" data-mode="single">👁️ Single View</button>
+                <button type="button" class="view-mode-btn" data-mode="compare">🔀 Compare Styles (Side-by-Side)</button>
+              </div>
+            </div>
+
+            <div class="studio-viewport-card">
+              <div class="ratio-selector" id="ratio-selector">
+                <button type="button" class="ratio-btn active" data-ratio="9:16" title="Vertical (TikTok, Reels, Shorts)">9:16</button>
+                <button type="button" class="ratio-btn" data-ratio="4:5" title="Portrait (Instagram Feed)">4:5</button>
+                <button type="button" class="ratio-btn" data-ratio="1:1" title="Square (Instagram)">1:1</button>
+                <button type="button" class="ratio-btn" data-ratio="16:9" title="Horizontal (YouTube)">16:9</button>
+              </div>
+
+              <!-- Side-by-Side Viewport Stage -->
+              <div class="studio-stage-views" id="studio-stage-views">
+                <!-- View A (Active Style) -->
+                <div class="stage-view-col" id="stage-view-a">
+                  <div class="stage-view-badge" id="stage-badge-a">
+                    <span class="badge-dot"></span>
+                    <span class="badge-text" id="stage-badge-a-text">Style A: Bold Highlight</span>
+                  </div>
+                  <div class="studio-canvas-container" id="editor-canvas-container">
+                    <video id="editor-video" playsinline loop muted></video>
+                    <div class="editor-safe-overlay" id="editor-safe-overlay"></div>
+                    <div class="editor-caption-overlay" id="editor-caption-overlay">
+                      <div class="caption-text-box" id="editor-caption-box"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- View B (Comparison Style) -->
+                <div class="stage-view-col compare-only" id="stage-view-b" style="display:none">
+                  <div class="stage-view-badge" id="stage-badge-b">
+                    <span class="badge-dot" style="background:var(--accent-cyan)"></span>
+                    <span>Style B:</span>
+                    <select id="editor-compare-preset-select" class="compare-preset-dropdown">
+                      <option value="karaoke" selected>🎤 Karaoke Word</option>
+                      <option value="bold">🔥 Bold Highlight</option>
+                      <option value="pop">⚡ Animated Pop</option>
+                      <option value="cinematic">🎬 Cinematic</option>
+                      <option value="minimal">✨ Clean Minimal</option>
+                      <option value="podcast">🎙️ Podcast Sub</option>
+                      <option value="educational">📚 Educational</option>
+                      <option value="gaming">🎮 Gaming Neon</option>
+                    </select>
+                  </div>
+                  <div class="studio-canvas-container" id="editor-canvas-container-b">
+                    <video id="editor-video-b" playsinline loop muted></video>
+                    <div class="editor-safe-overlay"></div>
+                    <div class="editor-caption-overlay" id="editor-caption-overlay-b">
+                      <div class="caption-text-box" id="editor-caption-box-b"></div>
+                    </div>
+                  </div>
+                  <button type="button" class="btn-use-style-b" id="btn-use-style-b" title="Adopt Style B as current clip caption style">✓ Choose Style B</button>
+                </div>
+              </div>
+
+              <!-- Viewport Controls -->
+              <div class="studio-stage-footer">
+                <label class="toggle-pill-label">
+                  <input type="checkbox" id="toggle-editor-safe-zone" checked />
+                  <span>📱 9:16 Safe Zones</span>
+                </label>
+                <div class="editor-volume-bar">
+                  <button type="button" class="volume-toggle" id="volume-toggle" title="Toggle Mute">
+                    <svg class="vol-icon-on" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2.5L4.5 5.5H2v5h2.5L8 13.5V2.5z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 5.5a3.5 3.5 0 010 5M12.5 3.5a6 6 0 010 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                    <svg class="vol-icon-off" width="16" height="16" viewBox="0 0 16 16" fill="none" style="display:none"><path d="M8 2.5L4.5 5.5H2v5h2.5L8 13.5V2.5z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 6l3.5 4M14.5 6L11 10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                  </button>
+                  <input type="range" id="volume-slider" min="0" max="1" value="0.7" step="0.05" class="volume-slider" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Comprehensive Creative Controls -->
+          <div class="studio-controls-panel">
+            <!-- Section 1: Caption Presets & Typography -->
+            <div class="studio-control-card">
+              <div class="studio-card-header">
+                <div class="studio-header-title">🔤 Caption Studio</div>
+                <label class="toggle-switch-wrap">
+                  <span id="editor-val-captions" style="font-size:0.76rem;font-weight:600;margin-right:8px">ON</span>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="editor-captions-toggle" checked />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </label>
+              </div>
+
+              <!-- 8 Professional Presets Grid -->
+              <div class="editor-presets-grid" id="editor-presets-grid">
+                <button type="button" class="preset-chip active" data-preset="bold">🔥 Bold Highlight</button>
+                <button type="button" class="preset-chip" data-preset="karaoke">🎤 Karaoke Word</button>
+                <button type="button" class="preset-chip" data-preset="pop">⚡ Animated Pop</button>
+                <button type="button" class="preset-chip" data-preset="cinematic">🎬 Cinematic</button>
+                <button type="button" class="preset-chip" data-preset="minimal">✨ Clean Minimal</button>
+                <button type="button" class="preset-chip" data-preset="podcast">🎙️ Podcast Sub</button>
+                <button type="button" class="preset-chip" data-preset="educational">📚 Educational</button>
+                <button type="button" class="preset-chip" data-preset="gaming">🎮 Gaming Neon</button>
+              </div>
+
+              <!-- Typography Customization -->
+              <div class="studio-subgrid" style="margin-top:12px">
+                <div class="form-group">
+                  <label for="editor-font-family">Font Family</label>
+                  <select id="editor-font-family" class="customizer-select">
+                    <option value="Outfit">Outfit (Bold Display)</option>
+                    <option value="Inter">Inter (Clean Sans)</option>
+                    <option value="Montserrat">Montserrat (Impactful)</option>
+                    <option value="Impact">Impact (Classic Viral)</option>
+                    <option value="Arial">Arial (System Standard)</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label>Font Size (<span id="editor-font-size-val">52px</span>)</label>
+                  <input type="range" id="editor-font-size" min="30" max="80" value="52" step="2" />
+                </div>
+              </div>
+
+              <!-- Colors & Text Casing -->
+              <div class="studio-subgrid" style="margin-top:10px">
+                <div class="form-group">
+                  <label for="editor-color-highlight">Active Word Color</label>
+                  <input type="color" id="editor-color-highlight" value="#fee440" class="color-picker-input" />
+                </div>
+                <div class="form-group">
+                  <label for="editor-color-text">Base Text Color</label>
+                  <input type="color" id="editor-color-text" value="#ffffff" class="color-picker-input" />
+                </div>
+              </div>
+
+              <div class="form-group" style="margin-top:10px">
+                <label>Text Case</label>
+                <div class="case-button-row" id="editor-case-btns">
+                  <button type="button" class="btn-case active" data-case="uppercase">UPPERCASE</button>
+                  <button type="button" class="btn-case" data-case="capitalize">Title Case</button>
+                  <button type="button" class="btn-case" data-case="normal">normal</button>
+                </div>
+              </div>
+
+              <!-- Platform Safe Margin Slider -->
+              <div class="form-group" style="margin-top:12px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                  <label for="editor-margin-v" style="font-size:0.78rem">Vertical Position (Safe Zone)</label>
+                  <span id="editor-margin-v-val" style="font-size:0.78rem;font-weight:700;color:var(--accent-purple)">420px</span>
+                </div>
+                <input type="range" id="editor-margin-v" min="160" max="650" value="420" step="10" />
+                <div id="editor-safe-zone-status" class="safe-zone-status safe" style="font-size:0.72rem;margin-top:5px;display:flex;align-items:center;gap:6px">
+                  <span>✅ Platform Safe: Avoids TikTok & Reels bottom engagement UI</span>
+                </div>
+              </div>
+
+              <!-- Subtitle Export Buttons -->
+              <div class="subtitle-export-row" style="margin-top:14px;display:flex;gap:10px;">
+                <button type="button" class="btn-secondary btn-sm" id="btn-editor-export-srt" title="Download SubRip .SRT file">📥 Export .SRT</button>
+                <button type="button" class="btn-secondary btn-sm" id="btn-editor-export-ass" title="Download Advanced SubStation Alpha .ASS file">📥 Export .ASS</button>
+              </div>
+            </div>
+
+            <!-- Section 2: Timing & Trimming -->
+            <div class="studio-control-card">
+              <div class="studio-card-header">
+                <div class="studio-header-title">✂️ Timing & Trimming</div>
+                <span id="editor-val-length" style="font-size:0.8rem;font-weight:700;color:var(--accent-purple)">0.0s</span>
+              </div>
               <div class="range-slider-wrap">
                 <input type="range" id="editor-start" min="0" max="100" value="0" step="0.1">
                 <input type="range" id="editor-end" min="0" max="100" value="100" step="0.1">
               </div>
             </div>
-            <div class="control-section-label">📐 Aspect Ratio</div>
-            <div class="control-group">
-              <label>
-                <span>Current Ratio</span>
-                <span id="editor-val-ratio">1:1</span>
-              </label>
-            </div>
 
-            <!-- Caption Toggle -->
-            <div class="control-section-label">🔤 Captions</div>
-            <div class="control-group">
-              <label>
-                <span>Burn-in Subtitles</span>
-                <span id="editor-val-captions">OFF</span>
-              </label>
-              <div class="toggle-switch-wrap">
-                <label class="toggle-switch">
-                  <input type="checkbox" id="editor-captions-toggle" />
-                  <span class="toggle-slider"></span>
-                </label>
+            <!-- Section 3: Framing & Zoom -->
+            <div class="studio-control-card">
+              <div class="studio-card-header">
+                <div class="studio-header-title">🔍 Framing & Zoom</div>
+                <span id="editor-val-zoom" style="font-size:0.8rem;font-weight:600">1.0x</span>
               </div>
-            </div>
-
-            <div class="control-section-label">🔍 Transform</div>
-            <div class="control-group">
-              <label>
-                <span>Zoom Level</span>
-                <span id="editor-val-zoom">1.0x</span>
-              </label>
               <input type="range" id="editor-zoom" min="0.1" max="3.0" value="1.0" step="0.1">
             </div>
-            
-            <div class="control-section-label">🎨 Color & Filters</div>
-            <!-- Filters -->
-            <div class="control-group">
-              <label>
-                <span>Exposure</span>
-                <span id="editor-val-exposure">0.0</span>
-              </label>
-              <input type="range" id="editor-exposure" min="-1.0" max="1.0" value="0" step="0.05">
-            </div>
-            <div class="control-group">
-              <label>
-                <span>Contrast</span>
-                <span id="editor-val-contrast">1.0</span>
-              </label>
-              <input type="range" id="editor-contrast" min="0.0" max="2.0" value="1.0" step="0.05">
-            </div>
-            <div class="control-group">
-              <label>
-                <span>Saturation</span>
-                <span id="editor-val-saturation">1.0</span>
-              </label>
-              <input type="range" id="editor-saturation" min="0.0" max="3.0" value="1.0" step="0.1">
-            </div>
-            <div class="control-group">
-              <label>
-                <span>Sharpen</span>
-                <span id="editor-val-sharpen">0.0</span>
-              </label>
-              <input type="range" id="editor-sharpen" min="0.0" max="1.0" value="0.0" step="0.1">
+
+            <!-- Section 4: Color Grading & Filters -->
+            <div class="studio-control-card">
+              <div class="studio-header-title" style="margin-bottom:8px">🎨 Color Tone</div>
+              <div class="studio-subgrid">
+                <div class="form-group">
+                  <label>Exposure: <span id="editor-val-exposure">0.0</span></label>
+                  <input type="range" id="editor-exposure" min="-1.0" max="1.0" value="0" step="0.05">
+                </div>
+                <div class="form-group">
+                  <label>Contrast: <span id="editor-val-contrast">1.0</span></label>
+                  <input type="range" id="editor-contrast" min="0.0" max="2.0" value="1.0" step="0.05">
+                </div>
+                <div class="form-group">
+                  <label>Saturation: <span id="editor-val-saturation">1.0</span></label>
+                  <input type="range" id="editor-saturation" min="0.0" max="3.0" value="1.0" step="0.1">
+                </div>
+                <div class="form-group">
+                  <label>Sharpen: <span id="editor-val-sharpen">0.0</span></label>
+                  <input type="range" id="editor-sharpen" min="0.0" max="1.0" value="0.0" step="0.1">
+                </div>
+              </div>
             </div>
           </div>
         </div>
-        <div class="modal-footer">
-          <button class="btn-secondary" id="editor-cancel">Cancel</button>
-          <button class="btn-primary" id="editor-save">Save Settings</button>
+
+        <div class="modal-footer studio-modal-footer">
+          <button type="button" class="btn-secondary" id="editor-cancel">Cancel</button>
+          <button type="button" class="btn-secondary" id="editor-save">💾 Save This Clip</button>
+          <button type="button" class="btn-secondary" id="editor-apply-all" style="border-color:var(--accent-cyan);color:var(--accent-cyan)" title="Apply caption preset and styling to all clips in this project">✨ Apply to All Clips</button>
+          <button type="button" class="btn-primary" id="editor-rerender-btn">🚀 Apply & Re-Render Clip</button>
         </div>
       </div>
     </div>
 
+    <!-- ─── Video Preview Modal ───────────────────────── -->
+    <div class="modal-overlay" id="clip-preview-modal">
+      <div class="modal-content" style="max-width:440px;padding:0;background:#09090e;border:1px solid rgba(255,255,255,0.12);overflow:hidden">
+        <div class="modal-header" style="border-bottom:1px solid rgba(255,255,255,0.08);padding:12px 18px">
+          <h3 class="modal-title" id="preview-modal-title" style="font-size:0.95rem">Clip Preview</h3>
+          <button class="modal-close" id="preview-modal-close">&times;</button>
+        </div>
+        <div style="display:flex;justify-content:center;background:#000;padding:16px">
+          <div style="width:260px;aspect-ratio:9/16;background:#050508;border-radius:16px;overflow:hidden;box-shadow:0 0 30px rgba(0,0,0,0.8);border:2px solid rgba(255,255,255,0.08);position:relative">
+            <video id="preview-modal-video" controls autoplay playsinline style="width:100%;height:100%;object-fit:contain;background:#000"></video>
+          </div>
+        </div>
+        <div style="padding:14px 18px;background:rgba(255,255,255,0.02);border-top:1px solid rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center">
+          <span id="preview-modal-meta" style="font-size:0.78rem;color:var(--text-muted)">9:16 Vertical Short</span>
+          <button type="button" class="btn-secondary btn-sm" id="preview-modal-download">Download MP4</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Stop Confirmation Modal ───────────────────────── -->
+    <div class="modal-overlay" id="stop-confirm-modal">
+      <div class="modal-content stop-modal-content" style="max-width:440px;background:#0d0e15;border:1px solid rgba(239,68,68,0.3);border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,0.8),0 0 30px rgba(239,68,68,0.15)">
+        <div class="modal-header" style="border-bottom:1px solid rgba(255,255,255,0.08);padding:14px 20px;display:flex;align-items:center;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:1.2rem">🛑</span>
+            <h3 class="modal-title" style="font-size:1rem;color:#f87171;font-weight:700">Stop Video Generation?</h3>
+          </div>
+          <button class="modal-close" id="stop-modal-close" style="background:none;border:none;color:var(--text-muted);font-size:1.4rem;cursor:pointer">&times;</button>
+        </div>
+        <div class="modal-body" style="padding:20px;font-size:0.9rem;color:var(--text-secondary);line-height:1.5">
+          <p style="margin:0 0 10px 0;font-weight:600;color:var(--text-primary)">Do you actually want to stop generating clips?</p>
+          <p style="margin:0;font-size:0.82rem;color:var(--text-muted)">Any in-progress audio download, transcription, or clip rendering will be halted immediately.</p>
+        </div>
+        <div class="modal-footer" style="padding:14px 20px;border-top:1px solid rgba(255,255,255,0.08);display:flex;justify-content:flex-end;gap:10px">
+          <button type="button" class="btn-secondary btn-sm" id="btn-stop-cancel">Cancel (Continue)</button>
+          <button type="button" class="btn-danger btn-sm" id="btn-stop-confirm" style="background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff;border:none;padding:8px 18px;border-radius:8px;font-weight:700;cursor:pointer;box-shadow:0 2px 10px rgba(239,68,68,0.4)">Yes, Stop</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── System Health & Provider Status (Bottom Section) ────── -->
+    <section class="system-status-section" id="home-system-status">
+      <div class="system-status-header">
+        <div class="sys-title-wrap">
+          <span class="sys-head-icon">🖥️</span>
+          <div>
+            <h3 class="sys-section-title">System Health &amp; Providers</h3>
+            <p class="sys-section-sub">Real-time status of local AI, cloud inference, hardware acceleration and media tools</p>
+          </div>
+        </div>
+        <button type="button" id="btn-refresh-status" class="btn-clean-settings" title="Refresh system diagnostics">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+          <span>Refresh</span>
+        </button>
+      </div>
+
+      <div class="system-status-grid">
+        <!-- Ollama Local Card -->
+        <div class="sys-card" id="card-ollama-status">
+          <div class="sys-card-header">
+            <div class="sys-card-title-group">
+              <span class="sys-icon">🦙</span>
+              <div>
+                <div class="sys-name">Ollama (Local AI)</div>
+                <div class="sys-sub">100% Offline GPU/CPU</div>
+              </div>
+            </div>
+            <span class="sys-badge badge-pending" id="badge-ollama">Checking...</span>
+          </div>
+          <div class="sys-card-body">
+            <div class="sys-detail-row">
+              <span class="sys-label">Daemon:</span>
+              <span class="sys-val" id="stat-ollama-daemon">--</span>
+            </div>
+            <div class="sys-detail-row">
+              <span class="sys-label">Active Model:</span>
+              <span class="sys-val" id="stat-ollama-model">llama3.2:3b</span>
+            </div>
+            <div class="sys-detail-row">
+              <span class="sys-label">Model Available:</span>
+              <span class="sys-val" id="stat-ollama-installed">--</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Groq Cloud Card -->
+        <div class="sys-card" id="card-groq-status">
+          <div class="sys-card-header">
+            <div class="sys-card-title-group">
+              <span class="sys-icon">⚡</span>
+              <div>
+                <div class="sys-name">Groq (Cloud AI)</div>
+                <div class="sys-sub">Ultra-Fast LPUs</div>
+              </div>
+            </div>
+            <span class="sys-badge badge-pending" id="badge-groq">Checking...</span>
+          </div>
+          <div class="sys-card-body">
+            <div class="sys-detail-row">
+              <span class="sys-label">API Status:</span>
+              <span class="sys-val" id="stat-groq-api">--</span>
+            </div>
+            <div class="sys-detail-row">
+              <span class="sys-label">API Key:</span>
+              <span class="sys-val" id="stat-groq-key">--</span>
+            </div>
+            <div class="sys-detail-row">
+              <span class="sys-label">Active Model:</span>
+              <span class="sys-val" id="stat-groq-model">llama-3.3-70b-versatile</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Engine & Hardware Card -->
+        <div class="sys-card" id="card-hw-status">
+          <div class="sys-card-header">
+            <div class="sys-card-title-group">
+              <span class="sys-icon">⚙️</span>
+              <div>
+                <div class="sys-name">Engine &amp; Hardware</div>
+                <div class="sys-sub">FFmpeg, GPU &amp; Media Tools</div>
+              </div>
+            </div>
+            <span class="sys-badge badge-ok" id="badge-hw">Ready</span>
+          </div>
+          <div class="sys-card-body">
+            <div class="sys-detail-row">
+              <span class="sys-label">FFmpeg / NVENC:</span>
+              <span class="sys-val" id="stat-hw-ffmpeg">Checking...</span>
+            </div>
+            <div class="sys-detail-row">
+              <span class="sys-label">yt-dlp Downloader:</span>
+              <span class="sys-val" id="stat-hw-ytdlp">Checking...</span>
+            </div>
+            <div class="sys-detail-row">
+              <span class="sys-label">Storage Capacity:</span>
+              <span class="sys-val" id="stat-hw-storage">Checking...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <footer>
-      <p>L2S v2 — 100% local, free, private. No data leaves your machine. Powered by Ollama + FFmpeg + yt-dlp</p>
+      <p>L2S v2 — Turn long-form videos into viral shorts. 100% local, free, private. Powered by Ollama + Groq + FFmpeg + yt-dlp</p>
     </footer>
   </div>
 

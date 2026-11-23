@@ -1,136 +1,382 @@
 // =============================================
-// SKATE — Heuristic Scorer
+// L2S — Multi-Signal Heuristic Scorer
 // =============================================
+// Scores each candidate segment on 6 signals, weighted by genre.
+// This is the cheap pre-filter that runs before the LLM.
 
-const EMOTIONAL_WORDS = new Set([
-  "secret", "mistake", "never", "always", "million", "billion", "worst",
-  "best", "amazing", "terrible", "incredible", "shocking", "unbelievable",
-  "genius", "stupid", "dangerous", "brilliant", "horrible", "fantastic",
-  "disaster", "miracle", "nightmare", "legend", "epic", "huge",
-  "massive", "tiny", "destroy", "save", "kill", "love",
-  "hate", "fear", "angry", "excited", "devastating", "extraordinary",
-  "insane", "ridiculous", "hilarious", "tragic", "critical",
-]);
-
-const ENGAGEMENT_PHRASES = [
-  "did you know", "here's why", "what happened next", "the reason why",
-  "here's the thing", "the truth is", "you won't believe", "this is why",
-  "that's why", "here's how", "the problem is", "the best part",
-  "wait until", "the moment", "check this out", "think about",
-  "the secret to", "you need to know", "this changes everything",
-  "here's the deal", "most people don't know", "what they don't tell you",
-  "the real reason", "this is what happens", "you'll never guess",
-];
-
-const STORY_MARKERS = [
-  { pattern: /problem|issue|challenge|struggle|difficult/, type: "problem" },
-  { pattern: /but|however|although|despite|yet/, type: "conflict" },
-  { pattern: /so|therefore|that's why|which means|turns out/, type: "lesson" },
-  { pattern: /suddenly|unexpectedly|out of nowhere|then/, type: "surprise" },
-];
+import { SCORING_CONFIG, getGenreProfile } from './genre_config.js';
 
 /**
- * Score a transcript chunk on virality potential (0-100)
+ * Score a candidate segment using 6 heuristic signals.
+ *
+ * @param {Object} segment - { id, start, end, text, words }
+ * @param {string} genre - Genre key (e.g. "motivational", "comedy")
+ * @param {Object} [genreProfile] - Override genre profile
+ * @returns {Object} Scored segment with breakdown
  */
-export function scoreChunk(chunk) {
-  const text = chunk.text;
-  const duration = chunk.end - chunk.start;
-  const wordCount = (chunk.words || []).length || text.split(/\s+/).length;
-  const words = text.toLowerCase().split(/\s+/);
+export function scoreSegment(segment, genre, genreProfile = null) {
+  const profile = genreProfile || getGenreProfile(genre);
+  const { weights } = profile;
+  const text = segment.text || '';
+  const wordsArr = text.toLowerCase().split(/\s+/).filter(Boolean);
+  const duration = segment.end - segment.start;
 
-  const speakingRate = scoreSpeakingRate(wordCount, duration);
-  const emotionalLanguage = scoreEmotionalLanguage(words);
-  const sentimentShift = scoreSentimentShift(words);
-  const storyStructure = scoreStoryStructure(text);
-  const engagementHooks = scoreEngagementHooks(text);
+  // Compute each signal (0–100)
+  const hook = scoreHookStrength(segment, wordsArr);
+  const standalone = scoreStandalone(wordsArr, text);
+  const payoff = scorePayoff(wordsArr, text);
+  const emotion = scoreEmotion(wordsArr, segment);
+  const topicDensity = scoreTopicDensity(wordsArr, profile);
+  const lengthFit = scoreLengthFit(duration);
 
-  const total = (
-    speakingRate * 0.15 +
-    emotionalLanguage * 0.20 +
-    sentimentShift * 0.15 +
-    storyStructure * 0.25 +
-    engagementHooks * 0.25
+  // Weighted total
+  const total = Math.round(
+    hook * (weights.hook || 0) +
+    standalone * (weights.standalone || 0) +
+    payoff * (weights.payoff || 0) +
+    emotion * (weights.emotion || 0) +
+    topicDensity * (weights.topicDensity || 0) +
+    lengthFit * (weights.lengthFit || 0)
   );
 
+  const breakdown = {
+    hook: Math.round(hook),
+    standalone: Math.round(standalone),
+    payoff: Math.round(payoff),
+    emotion: Math.round(emotion),
+    topicDensity: Math.round(topicDensity),
+    lengthFit: Math.round(lengthFit),
+    total,
+  };
+
   return {
-    speakingRate: Math.round(speakingRate),
-    emotionalLanguage: Math.round(emotionalLanguage),
-    sentimentShift: Math.round(sentimentShift),
-    storyStructure: Math.round(storyStructure),
-    engagementHooks: Math.round(engagementHooks),
-    total: Math.round(total),
+    ...segment,
+    heuristic: breakdown,
+    breakdownStr: `H:${breakdown.hook} S:${breakdown.standalone} P:${breakdown.payoff} E:${breakdown.emotion} T:${breakdown.topicDensity} L:${breakdown.lengthFit} = ${total}`,
   };
 }
 
-function scoreSpeakingRate(wordCount, durationSec) {
-  if (durationSec <= 0) return 0;
-  const wpm = (wordCount / durationSec) * 60;
-
-  if (wpm < 100) return 20;
-  if (wpm < 140) return 40;
-  if (wpm < 180) return 70;
-  if (wpm < 220) return 90;
-  return 80;
+/**
+ * Score a batch of segments.
+ */
+export function scoreSegments(segments, genre) {
+  const profile = getGenreProfile(genre);
+  return segments.map(seg => scoreSegment(seg, genre, profile));
 }
 
-function scoreEmotionalLanguage(words) {
-  const matches = words.filter((w) => EMOTIONAL_WORDS.has(w)).length;
-  if (words.length === 0) return 0;
+// ─────────────────────────────────────────────
+// Signal 1: Hook Strength (first 3 seconds)
+// ─────────────────────────────────────────────
+function scoreHookStrength(segment, wordsArr) {
+  if (wordsArr.length === 0) return 0;
 
-  const ratio = matches / words.length;
+  const hookWords = getHookWords(segment);
+  const hookText = hookWords.join(' ').toLowerCase();
 
-  if (ratio < 0.01) return 10;
-  if (ratio < 0.03) return 40;
-  if (ratio < 0.06) return 70;
-  if (ratio < 0.10) return 90;
-  return 80;
-}
+  let score = 30; // baseline
 
-function scoreSentimentShift(words) {
-  const positive = new Set(["amazing", "great", "love", "best", "fantastic", "incredible", "perfect", "wonderful", "brilliant", "excellent"]);
-  const negative = new Set(["terrible", "worst", "hate", "awful", "horrible", "disaster", "dreadful", "atrocious", "fear"]);
-
-  let posCount = 0;
-  let negCount = 0;
-
-  for (const word of words) {
-    const clean = word.replace(/[^a-z]/g, "");
-    if (positive.has(clean)) posCount++;
-    if (negative.has(clean)) negCount++;
+  // Reward: opens with a question
+  if (hookText.includes('?') || /^(why|how|what|when|who|where|did|do|does|is|are|can|could|would|should|have)\b/.test(hookText)) {
+    score += 25;
   }
 
-  if (posCount > 0 && negCount > 0) {
-    const ratio = Math.min(posCount, negCount) / Math.max(posCount, negCount);
-    return Math.round(ratio * 100);
+  // Reward: opens with a number or statistic
+  if (/\b\d+\b/.test(hookText)) {
+    score += 15;
   }
 
-  const total = posCount + negCount;
-  if (total === 0) return 20;
-  return 30;
-}
-
-function scoreStoryStructure(text) {
-  const lower = text.toLowerCase();
-  let score = 10;
-
-  for (const marker of STORY_MARKERS) {
-    if (marker.pattern.test(lower)) {
-      score += 20;
+  // Reward: opens with a bold claim or superlative
+  const boldClaims = ['never', 'always', 'best', 'worst', 'only', 'every', 'nobody', 'everyone', 'most people', 'the truth', 'the secret', 'the problem'];
+  for (const claim of boldClaims) {
+    if (hookText.includes(claim)) {
+      score += 15;
+      break;
     }
   }
 
-  return Math.min(score, 100);
-}
+  // Reward: emotional/exclamatory opening
+  if (hookText.includes('!') || /\b(incredible|insane|unbelievable|shocking|amazing|crazy)\b/.test(hookText)) {
+    score += 10;
+  }
 
-function scoreEngagementHooks(text) {
-  const lower = text.toLowerCase();
-  let score = 10;
-
-  for (const phrase of ENGAGEMENT_PHRASES) {
-    if (lower.includes(phrase)) {
-      score += 20;
+  // Penalty: opens with filler words
+  const firstWord = wordsArr[0] || '';
+  const firstTwoWords = wordsArr.slice(0, 2).join(' ');
+  for (const filler of SCORING_CONFIG.fillerWords) {
+    if (firstWord === filler || firstTwoWords === filler) {
+      score -= 25;
+      break;
     }
   }
 
-  return Math.min(score, 100);
+  // Penalty: opens with continuation words (needs prior context)
+  for (const cont of SCORING_CONFIG.continuationOpeners) {
+    if (hookText.startsWith(cont)) {
+      score -= 20;
+      break;
+    }
+  }
+
+  return clamp(score, 0, 100);
+}
+
+/**
+ * Get the words from the first ~3 seconds of a segment.
+ */
+function getHookWords(segment) {
+  const hookEnd = segment.start + SCORING_CONFIG.hookWindowSeconds;
+
+  if (segment.words && segment.words.length > 0) {
+    return segment.words
+      .filter(w => w.start < hookEnd)
+      .map(w => w.word);
+  }
+
+  // Fallback: approximate — first ~20% of words
+  const allWords = (segment.text || '').split(/\s+/);
+  const hookCount = Math.max(3, Math.ceil(allWords.length * 0.2));
+  return allWords.slice(0, hookCount);
+}
+
+// ─────────────────────────────────────────────
+// Signal 2: Standalone Comprehensibility
+// ─────────────────────────────────────────────
+function scoreStandalone(wordsArr, text) {
+  if (wordsArr.length === 0) return 0;
+
+  let score = 70; // start optimistic
+
+  // Penalty: first sentence has dangling pronouns without antecedent
+  const firstSentence = text.split(/[.!?]/)[0]?.toLowerCase() || '';
+  const firstSentenceWords = firstSentence.split(/\s+/).filter(Boolean);
+
+  for (const ref of SCORING_CONFIG.danglingReferences) {
+    // Only penalize if the pronoun appears in the first 5 words (likely needs context)
+    const idx = firstSentenceWords.indexOf(ref);
+    if (idx >= 0 && idx < 5) {
+      score -= 12;
+      break; // only penalize once for first-sentence pronouns
+    }
+  }
+
+  // Penalty: starts with continuation opener
+  const firstTwo = wordsArr.slice(0, 2).join(' ');
+  for (const cont of SCORING_CONFIG.continuationOpeners) {
+    if (firstTwo.startsWith(cont) || wordsArr[0] === cont) {
+      score -= 15;
+      break;
+    }
+  }
+
+  // Penalty: contains "as I mentioned", "like I said", etc.
+  const contextRefs = ['as i mentioned', 'like i said', 'remember when', 'going back to', 'earlier i said', 'this thing i mentioned'];
+  for (const ref of contextRefs) {
+    if (text.toLowerCase().includes(ref)) {
+      score -= 10;
+    }
+  }
+
+  // Reward: segment introduces its own topic/subject clearly
+  const introPatterns = ['today', 'let me tell you', 'here\'s', 'the thing about', 'imagine', 'picture this', 'have you ever'];
+  for (const intro of introPatterns) {
+    if (text.toLowerCase().startsWith(intro) || firstSentence.includes(intro)) {
+      score += 10;
+      break;
+    }
+  }
+
+  return clamp(score, 0, 100);
+}
+
+// ─────────────────────────────────────────────
+// Signal 3: Payoff / Structure
+// ─────────────────────────────────────────────
+function scorePayoff(wordsArr, text) {
+  if (wordsArr.length === 0) return 0;
+
+  const lower = text.toLowerCase();
+  let score = 20; // baseline
+
+  // Divide text into thirds
+  const thirdLen = Math.floor(wordsArr.length / 3);
+  const firstThird = wordsArr.slice(0, thirdLen).join(' ');
+  const lastThird = wordsArr.slice(-thirdLen).join(' ');
+  const last15Pct = wordsArr.slice(-Math.max(3, Math.ceil(wordsArr.length * 0.15))).join(' ');
+
+  // Setup markers in first third
+  const setupMarkers = ['problem', 'issue', 'challenge', 'question', 'wonder', 'struggle', 'confused'];
+  for (const m of setupMarkers) {
+    if (firstThird.includes(m)) { score += 10; break; }
+  }
+
+  // Transition/tension markers in middle
+  const tensionMarkers = ['but', 'however', 'although', 'yet', 'despite', 'until', 'then'];
+  for (const m of tensionMarkers) {
+    if (lower.includes(m)) { score += 10; break; }
+  }
+
+  // Payoff markers in the last 15%
+  for (const marker of SCORING_CONFIG.payoffMarkers) {
+    if (last15Pct.includes(marker)) {
+      score += 25;
+      break;
+    }
+  }
+
+  // Reward: last third contains resolution language
+  const resolutionWords = ['realized', 'learned', 'discovered', 'answer', 'solution', 'worked', 'changed', 'finally', 'result'];
+  for (const r of resolutionWords) {
+    if (lastThird.includes(r)) { score += 10; break; }
+  }
+
+  // Reward: contains a question AND an answer (mini Q&A arc)
+  if (lower.includes('?') && (lower.includes('the answer') || lower.includes('it\'s') || lower.includes('because'))) {
+    score += 10;
+  }
+
+  // Penalty: ends mid-sentence (no sentence-ending punctuation in last 10 words)
+  const lastWords = wordsArr.slice(-10).join(' ');
+  if (!/[.!?]/.test(lastWords)) {
+    score -= 15;
+  }
+
+  return clamp(score, 0, 100);
+}
+
+// ─────────────────────────────────────────────
+// Signal 4: Emotional / Energy Signal
+// ─────────────────────────────────────────────
+function scoreEmotion(wordsArr, segment) {
+  if (wordsArr.length === 0) return 0;
+
+  let score = 20; // baseline
+
+  // Emotional word density
+  const emotionalWords = new Set(SCORING_CONFIG.emotionalWords);
+  let emotionCount = 0;
+  for (const w of wordsArr) {
+    if (emotionalWords.has(w.replace(/[^a-z]/g, ''))) emotionCount++;
+  }
+  const emotionRatio = emotionCount / wordsArr.length;
+
+  if (emotionRatio >= 0.08) score += 30;
+  else if (emotionRatio >= 0.05) score += 25;
+  else if (emotionRatio >= 0.03) score += 15;
+  else if (emotionRatio >= 0.01) score += 5;
+
+  // Exclamation marks
+  const text = segment.text || '';
+  const exclamations = (text.match(/!/g) || []).length;
+  score += Math.min(15, exclamations * 5);
+
+  // Superlatives
+  const superlatives = (text.match(/\b(most|best|worst|biggest|smallest|fastest|greatest|least|largest|highest|lowest)\b/gi) || []).length;
+  score += Math.min(15, superlatives * 5);
+
+  // Speaking rate variance (proxy for excitement from word timestamps)
+  if (segment.words && segment.words.length >= 10) {
+    const rateVariance = computeSpeakingRateVariance(segment.words);
+    if (rateVariance > 2.0) score += 15;      // high variance = dynamic delivery
+    else if (rateVariance > 1.0) score += 8;
+  }
+
+  // All-caps words (emphasis proxy)
+  const capsWords = (text.match(/\b[A-Z]{2,}\b/g) || []).length;
+  score += Math.min(10, capsWords * 3);
+
+  return clamp(score, 0, 100);
+}
+
+/**
+ * Compute speaking rate variance across a segment's words.
+ * High variance = speaker speeds up/slows down = more dynamic.
+ */
+function computeSpeakingRateVariance(words) {
+  if (words.length < 6) return 0;
+
+  // Compute words-per-second in 3-second windows
+  const rates = [];
+  const windowSize = 3; // seconds
+  let i = 0;
+
+  while (i < words.length) {
+    const windowEnd = words[i].start + windowSize;
+    let count = 0;
+    let j = i;
+    while (j < words.length && words[j].start < windowEnd) {
+      count++;
+      j++;
+    }
+    if (j > i) {
+      const actualDuration = words[Math.min(j, words.length) - 1].end - words[i].start;
+      if (actualDuration > 0) {
+        rates.push(count / actualDuration);
+      }
+    }
+    i = j || i + 1;
+  }
+
+  if (rates.length < 2) return 0;
+
+  // Compute standard deviation of rates
+  const mean = rates.reduce((a, b) => a + b, 0) / rates.length;
+  const variance = rates.reduce((sum, r) => sum + (r - mean) ** 2, 0) / rates.length;
+  return Math.sqrt(variance);
+}
+
+// ─────────────────────────────────────────────
+// Signal 5: Topic Density (Genre Relevance)
+// ─────────────────────────────────────────────
+function scoreTopicDensity(wordsArr, profile) {
+  if (wordsArr.length === 0 || !profile.keywords || profile.keywords.length === 0) {
+    return 50; // neutral score when no genre keywords
+  }
+
+  const text = wordsArr.join(' ');
+  let matchCount = 0;
+
+  for (const keyword of profile.keywords) {
+    // Support multi-word keywords
+    if (keyword.includes(' ')) {
+      if (text.includes(keyword)) matchCount += 2; // multi-word matches count double
+    } else {
+      if (wordsArr.includes(keyword)) matchCount++;
+    }
+  }
+
+  const density = matchCount / wordsArr.length;
+
+  if (density >= 0.06) return 95;
+  if (density >= 0.04) return 80;
+  if (density >= 0.02) return 65;
+  if (density >= 0.01) return 45;
+  if (matchCount > 0) return 30;
+  return 10;
+}
+
+// ─────────────────────────────────────────────
+// Signal 6: Length Fit
+// ─────────────────────────────────────────────
+function scoreLengthFit(durationSec) {
+  const [idealMin, idealMax] = SCORING_CONFIG.idealLengthRange;
+  const [hardMin, hardMax] = SCORING_CONFIG.lengthPenaltyRange;
+
+  // Reject segments outside hard limits
+  if (durationSec < hardMin || durationSec > hardMax) return 0;
+
+  // Perfect score within ideal range
+  if (durationSec >= idealMin && durationSec <= idealMax) return 100;
+
+  // Gaussian-like falloff outside ideal range
+  const idealCenter = (idealMin + idealMax) / 2;
+  const distance = Math.abs(durationSec - idealCenter);
+  const sigma = (idealMax - idealMin); // spread
+
+  const score = 100 * Math.exp(-0.5 * (distance / sigma) ** 2);
+  return clamp(Math.round(score), 5, 100);
+}
+
+// ─── Utility ─────────────────────────────────
+function clamp(val, min, max) {
+  return Math.max(min, Math.min(max, val));
 }

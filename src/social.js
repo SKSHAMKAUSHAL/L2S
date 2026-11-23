@@ -1,71 +1,36 @@
 // =============================================
-// SKATE — Social Media Content Generator (Ollama)
+// L2S — Social Media Content Generator
 // =============================================
 
-/**
- * Query Ollama for content generation
- */
-async function queryOllama(prompt, systemPrompt, ollamaUrl, model) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
-
-  try {
-    const res = await fetch(`${ollamaUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        prompt,
-        system: systemPrompt,
-        stream: false,
-        options: { temperature: 0.7, num_predict: 600 },
-      }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-
-    if (!res.ok) {
-      throw new Error(`Ollama error: ${res.status} ${res.statusText}`);
-    }
-
-    const data = await res.json();
-    return data.response || '';
-  } catch (e) {
-    clearTimeout(timeout);
-    throw e;
-  }
-}
+import { aiRegistry } from './ai/registry.js';
 
 /**
- * Parse JSON from LLM response (handles markdown code fences)
+ * Query active LLM for content generation via provider interface
  */
-function parseJsonResponse(response) {
-  // Strip markdown code fences
-  let cleaned = response
-    .replace(/```json\s*/gi, '')
-    .replace(/```\s*/g, '')
-    .trim();
-
-  // Try to extract JSON object
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    cleaned = jsonMatch[0];
+async function querySocialLLM(prompt, systemPrompt) {
+  const provider = aiRegistry.getLLMProvider();
+  if (!provider.isConfigured()) {
+    throw new Error(`${provider.name} is active, but not configured.`);
   }
-
-  return JSON.parse(cleaned);
+  return await provider.generateStructuredJSON({
+    systemPrompt,
+    prompt,
+    timeoutMs: 30000,
+    temperature: 0.7,
+    maxTokens: 600,
+  });
 }
 
 /**
  * Generate viral social media content for a clip
  * @param {string} clipText - Transcript text of the clip
- * @param {string} genre - Content genre (funny, educational, etc.)
- * @param {string} language - Detected language of the video
- * @param {string} ollamaUrl - Ollama API URL
- * @param {string} model - Ollama model name
- * @returns {Object} { title, description, hashtags, caption }
+ * @param {string} [genre] - Content genre (funny, educational, etc.)
+ * @param {string} [language] - Detected language of the video
+ * @param {string} [_ollamaUrl] - Legacy parameter (ignored, uses active provider)
+ * @param {string} [_model] - Legacy parameter (ignored, uses active provider)
+ * @returns {Promise<Object>} { title, description, hashtags, caption }
  */
-export async function generateSocialContent(clipText, genre, language, ollamaUrl, model) {
+export async function generateSocialContent(clipText, genre, language, _ollamaUrl, _model) {
   const systemPrompt = `You are an elite viral social media content strategist who has grown 50+ accounts to 1M+ followers on TikTok, YouTube Shorts, and Instagram Reels.
 
 You understand:
@@ -115,10 +80,8 @@ Now generate content for the transcript above. Return a JSON object with exactly
 
 Return ONLY: {"title": "...", "description": "...", "hashtags": "...", "caption": "..."}`;
 
-
   try {
-    const response = await queryOllama(prompt, systemPrompt, ollamaUrl, model);
-    const parsed = parseJsonResponse(response);
+    const parsed = await querySocialLLM(prompt, systemPrompt);
 
     return {
       title: (parsed.title || 'Untitled Clip').slice(0, 80),
@@ -127,7 +90,7 @@ Return ONLY: {"title": "...", "description": "...", "hashtags": "...", "caption"
       caption: (parsed.caption || '').slice(0, 120),
     };
   } catch (e) {
-    // Fallback content if AI fails
+    // Fallback content if AI fails or is not configured
     const fallbackGenre = genre && genre !== 'auto' ? genre : 'amazing';
     return {
       title: `🔥 ${clipText.slice(0, 50)}...`,

@@ -1,16 +1,17 @@
 // =============================================
-// SKATE — Real Pipeline (Full End-to-End)
+// L2S — Pipeline (Full End-to-End)
 // =============================================
 
 import { downloadVideo, extractAudio } from './downloader.js';
 import { transcribeAudio } from './transcriber.js';
-import { chunkTranscript } from './chunker.js';
-import { scoreChunk } from './scorer.js';
-import { rankChunks, selectClips } from './ranker.js';
-import { generateSocialContent } from './social.js';
+import { selectClips } from './clip_selector.js';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { killAllProcesses } from './process_manager.js';
+import { aiRegistry } from './ai/registry.js';
+import { ensureSufficientDiskSpace } from './system/disk_guard.js';
+import { validateTimeRange, sanitizeAndValidateClips } from './video/validator.js';
 
 // Pipeline configuration — reads from env or uses sensible defaults
 const getConfig = () => ({
@@ -27,12 +28,13 @@ const getConfig = () => ({
 let currentPipeline = null;
 
 /**
- * Cancel the currently running pipeline
+ * Cancel the currently running pipeline and terminate all child processes
  */
 export function stopPipeline() {
   if (currentPipeline) {
     currentPipeline.stopped = true;
   }
+  killAllProcesses();
 }
 
 /**
@@ -69,109 +71,136 @@ function extractTranscriptForRange(transcript, start, end) {
 
 /**
  * Query Ollama to find chunks matching a user description.
- * Returns array of chunk indices sorted by relevance.
+ * Returns array of matched segments.
  */
-async function matchChunksByDescription(description, scoredChunks, ollamaUrl, model) {
-  const candidates = scoredChunks.slice(0, 30); // limit to avoid token overflow
+async function matchSegmentsByDescription(description, transcript, ollamaUrl, model) {
+  // Build a set of segments from the transcript for searching
+  const segments = transcript.segments.map((seg, i) => ({
+    index: i,
+    start: seg.start,
+    end: seg.end,
+    text: seg.text,
+  }));
 
-  const prompt = `The user wants clips about: "${description}"
+  const batchSize = 30;
+  let allMatchedIndices = [];
+  const systemPrompt = `You are a video clip search assistant. Given a user's description of what clips they want, you analyze transcript segments and return the indices of segments that best match their request. Return ONLY a JSON array of integers.`;
+
+  for (let i = 0; i < segments.length; i += batchSize) {
+    const candidates = segments.slice(i, i + batchSize);
+
+    const prompt = `The user wants clips about: "${description}"
 
 Here are transcript segments from a video. Return a JSON array of the segment indices that BEST match the user's description, ranked from most relevant to least. Return at most 10 matches.
 
 Segments:
-${candidates.map(c => `[${c.index}] ${c.chunk.start}s-${c.chunk.end}s: "${c.chunk.text.slice(0, 200)}"`).join('\n')}
+${candidates.map(c => `[${c.index}] ${c.start}s-${c.end}s: "${c.text.slice(0, 200)}"`).join('\n')}
 
 Return ONLY a JSON array of index numbers, e.g. [3, 7, 1]. No explanation.`;
 
-  const systemPrompt = `You are a video clip search assistant. Given a user's description of what clips they want, you analyze transcript segments and return the indices of segments that best match their request. Return ONLY a JSON array of integers.`;
+    try {
+      const activeProvider = aiRegistry.getLLMProvider();
+      if (!activeProvider.isConfigured()) {
+        throw new Error(`${activeProvider.name} is not configured.`);
+      }
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000);
-
-    const res = await fetch(`${ollamaUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
+      const structured = await activeProvider.generateStructuredJSON({
+        systemPrompt,
         prompt,
-        system: systemPrompt,
-        stream: false,
-        options: { temperature: 0.2, num_predict: 500 },
-      }),
-      signal: controller.signal,
-    });
+        timeoutMs: 30000,
+      });
 
-    clearTimeout(timeout);
-
-    if (!res.ok) throw new Error(`Ollama error: ${res.status}`);
-
-    const data = await res.json();
-    const responseText = (data.response || '').trim();
-
-    // Parse JSON array from response
-    const jsonMatch = responseText.match(/\[[\d\s,]+\]/);
-    if (jsonMatch) {
-      const indices = JSON.parse(jsonMatch[0]);
-      return indices.filter(i => typeof i === 'number' && i >= 0 && i < scoredChunks.length);
+      if (Array.isArray(structured)) {
+        const validIndices = structured.filter(idx => typeof idx === 'number' && idx >= 0 && idx < segments.length);
+        allMatchedIndices.push(...validIndices);
+      }
+    } catch (e) {
+      console.warn('Warning: Failed to match description for a batch', e.message);
     }
-    return [];
-  } catch (e) {
-    return []; // Will fall back to keyword matching
   }
+
+  // Deduplicate and return matched transcript ranges
+  const uniqueIndices = [...new Set(allMatchedIndices)].slice(0, 10);
+  return uniqueIndices.map(idx => {
+    const seg = segments[idx];
+    return extractTranscriptForRange(transcript, seg.start, seg.end);
+  });
 }
 
 /**
  * Keyword-based fallback for description matching.
- * Searches chunk text for words from the description.
  */
-function matchChunksByKeywords(description, scoredChunks) {
+function matchSegmentsByKeywords(description, transcript) {
   const keywords = description
     .toLowerCase()
     .replace(/[^\w\s]/g, '')
     .split(/\s+/)
-    .filter(w => w.length > 2); // skip short words like "the", "is", etc.
+    .filter(w => w.length > 2);
 
   if (keywords.length === 0) return [];
 
-  const scored = scoredChunks.map(c => {
-    const text = c.chunk.text.toLowerCase();
-    let matchCount = 0;
-    for (const kw of keywords) {
-      if (text.includes(kw)) matchCount++;
-    }
-    return { ...c, keywordScore: matchCount / keywords.length };
-  });
-
-  return scored
-    .filter(c => c.keywordScore > 0)
+  return transcript.segments
+    .map(seg => {
+      const text = seg.text.toLowerCase();
+      let matchCount = 0;
+      for (const kw of keywords) {
+        if (text.includes(kw)) matchCount++;
+      }
+      return { ...seg, keywordScore: matchCount / keywords.length };
+    })
+    .filter(s => s.keywordScore > 0)
     .sort((a, b) => b.keywordScore - a.keywordScore)
     .slice(0, 10)
-    .map(c => c.index);
+    .map(seg => extractTranscriptForRange(transcript, seg.start, seg.end));
 }
 
 /**
  * Deduplicate clips that overlap in time.
- * If two clips overlap by > 50%, keep the one with higher score or priority.
+ */
+/**
+ * Deduplicate clips using merge-sort O(n log n) algorithm
+ * Removes clips that overlap by >50% with existing clips
+ * Preserves source priority: timestamp > description > ai
+ * @param {Array} clips - Array of clip objects with {start, end, source}
+ * @returns {Array} Deduplicated clips in chronological order
  */
 function deduplicateClips(clips) {
-  const sorted = [...clips].sort((a, b) => a.start - b.start);
+  if (clips.length <= 1) return clips;
+  
+  // Step 1: Sort by start time (primary), then end time (secondary)
+  // For same time, prioritize manual > description > ai
+  const SOURCE_PRIORITY = { timestamp: 0, description: 1, ai: 2 };
+  
+  const sorted = [...clips].sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    if (a.end !== b.end) return a.end - b.end;
+    return SOURCE_PRIORITY[a.source || 'ai'] - SOURCE_PRIORITY[b.source || 'ai'];
+  });
+  
+  // Step 2: Deduplicate using sliding window
   const result = [];
-
   for (const clip of sorted) {
-    const overlapping = result.find(existing => {
+    // Check if any existing clip overlaps significantly
+    let hasOverlap = false;
+    
+    for (const existing of result) {
       const overlapStart = Math.max(existing.start, clip.start);
       const overlapEnd = Math.min(existing.end, clip.end);
       const overlapDuration = Math.max(0, overlapEnd - overlapStart);
       const clipDuration = clip.end - clip.start;
-      return overlapDuration > clipDuration * 0.5;
-    });
-
-    if (!overlapping) {
+      
+      // Keep clip if overlap < 50% of its duration
+      if (overlapDuration > clipDuration * 0.5) {
+        hasOverlap = true;
+        break;
+      }
+    }
+    
+    if (!hasOverlap) {
       result.push(clip);
     }
   }
-
+  
   return result;
 }
 
@@ -188,13 +217,33 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
   const pipeline = { stopped: false, videoPath: null, selected: null, clipsWithMeta: null, transcript: null };
   currentPipeline = pipeline;
 
-  const { description, timestamps, clipMode } = options;
-  const hasDescription = description && description.trim().length > 0;
+  const { description, timestamps, clipMode, clipCount, defaultRatio = '9:16', defaultZoom = 1.0, videoQuality = 'high', exportQuality = 'balanced' } = options;
   const hasTimestamps = timestamps && timestamps.length > 0;
-  const onlyManual = clipMode === 'only' && (hasDescription || hasTimestamps);
+  const onlyManual = clipMode === 'only';
+
+  if (onlyManual && !hasTimestamps) {
+    broadcast({
+      type: 'error',
+      errorCode: 'NO_MANUAL_INPUT',
+      msg: 'You selected "Only these clips" but did not provide any timestamps. Please add timestamps, then try again.',
+    });
+    throw new Error('PIPELINE_CANCELLED');
+  }
 
   const tempDir = path.join(rootDir, 'temp');
   const outputBaseDir = path.join(rootDir, 'output');
+
+  // Verify disk space before allocating temp files
+  try {
+    ensureSufficientDiskSpace(tempDir, 300 * 1024 * 1024);
+  } catch (diskErr) {
+    broadcast({
+      type: 'error',
+      errorCode: 'DISK_FULL',
+      msg: diskErr.message,
+    });
+    throw new Error('PIPELINE_CANCELLED');
+  }
 
   const checkStopped = (stepName) => {
     if (pipeline.stopped) {
@@ -214,12 +263,16 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
     if (isUrl) {
       const videoDir = path.join(tempDir, 'video');
       const logDownload = (msg) => broadcast({ type: 'log', level: 'info', msg: `   ${msg}` });
-      videoPath = await downloadVideo(source, videoDir, logDownload);
+      videoPath = await downloadVideo(source, videoDir, logDownload, videoQuality);
       broadcast({ type: 'log', level: 'success', msg: `✅ Downloaded: ${path.basename(videoPath)}` });
     } else {
-      // Local file
       if (!fs.existsSync(source)) {
-        throw new Error(`File not found: ${source}`);
+        broadcast({
+          type: 'error',
+          errorCode: 'FILE_NOT_FOUND',
+          msg: `File not found: ${source}. Please check the path and try again.`,
+        });
+        throw new Error('PIPELINE_CANCELLED');
       }
       videoPath = path.resolve(source);
       broadcast({ type: 'log', level: 'success', msg: `✅ Using local file: ${path.basename(videoPath)}` });
@@ -234,16 +287,39 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
     broadcast({ type: 'log', level: 'info', msg: '🎵 Extracting audio for transcription...' });
 
     const audioDir = path.join(tempDir, 'audio');
-    const audioPath = await extractAudio(videoPath, audioDir);
+    let audioPath;
+    try {
+      audioPath = await extractAudio(videoPath, audioDir);
+    } catch (e) {
+      broadcast({
+        type: 'error',
+        errorCode: 'FFMPEG_EXTRACT_FAILED',
+        msg: `FFmpeg failed to extract audio: ${e.message}`,
+        step: 'transcribe',
+      });
+      throw new Error('PIPELINE_CANCELLED');
+    }
     broadcast({ type: 'log', level: 'success', msg: '✅ Audio extracted successfully' });
     checkStopped('audio-extraction');
 
     // ─── Step 3: Transcribe with Whisper ──────────────
     broadcast({ type: 'log', level: 'info', msg: '🎤 Running Whisper transcription (this may take a few minutes)...' });
 
-    const transcript = await transcribeAudio(audioPath, config.cacheDir, 'tiny.en', (progressMsg) => {
-      broadcast({ type: 'log', level: 'info', msg: `    ${progressMsg}` });
-    });
+    let transcript;
+    try {
+      transcript = await transcribeAudio(audioPath, config.cacheDir, 'tiny.en', (progressMsg) => {
+        broadcast({ type: 'log', level: 'info', msg: `    ${progressMsg}` });
+      });
+    } catch (e) {
+      broadcast({
+        type: 'error',
+        errorCode: 'TRANSCRIPTION_FAILED',
+        msg: `Transcription failed: ${e.message}`,
+        step: 'transcribe',
+      });
+      throw new Error('PIPELINE_CANCELLED');
+    }
+
     pipeline.transcript = transcript;
 
     const wordCount = transcript.segments.reduce((sum, s) => sum + (s.words ? s.words.length : s.text.split(/\s+/).length), 0);
@@ -254,137 +330,159 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
     broadcast({ type: 'step', step: 'transcribe', status: 'done' });
     checkStopped('transcription');
 
-    // ─── Step 4: Chunk & Heuristic Score ──────────────
-    broadcast({ type: 'step', step: 'analyze', status: 'active' });
-    broadcast({ type: 'log', level: 'info', msg: '📊 Chunking transcript into clip-sized segments...' });
-
-    const chunks = chunkTranscript(transcript);
-
-    if (chunks.length === 0 && !hasTimestamps) {
-      throw new Error('No valid chunks found. The video might be too short or have no speech.');
-    }
-
-    const scoredChunks = chunks.map((chunk, index) => ({
-      index,
-      chunk,
-      heuristic: scoreChunk(chunk),
-    }));
-
-    if (scoredChunks.length > 0) {
-      const topScore = [...scoredChunks].sort((a, b) => b.heuristic.total - a.heuristic.total)[0];
-      broadcast({ type: 'log', level: 'success', msg: `✅ Found ${chunks.length} candidate segments (top heuristic score: ${topScore.heuristic.total}/100)` });
-    }
-    broadcast({ type: 'step', step: 'analyze', status: 'done' });
-    checkStopped('analysis');
-
-    // ─── Step 4b: Process Timestamp Clips ─────────────
+    // ─── Step 4: Process Timestamp Clips ─────────────
     const timestampClips = [];
     if (hasTimestamps) {
-      broadcast({ type: 'log', level: 'info', msg: `⏱️  Creating ${timestamps.length} manual timestamp clip(s)...` });
+      const { validClips: sanitizedTs, rejected } = sanitizeAndValidateClips(timestamps, transcript.duration);
+      if (rejected.length > 0) {
+        broadcast({ type: 'log', level: 'warning', msg: `⚠️ Ignored ${rejected.length} invalid timestamp(s): ${rejected.map(r => r.error).join('; ')}` });
+      }
 
-      for (const ts of timestamps) {
+      broadcast({ type: 'log', level: 'info', msg: `⏱️  Creating ${sanitizedTs.length} manual timestamp clip(s)...` });
+
+      for (const ts of sanitizedTs) {
         const chunk = extractTranscriptForRange(transcript, ts.start, ts.end);
         timestampClips.push({
           index: -1,
           chunk,
-          heuristic: { total: 80 }, // Give manual clips a solid baseline
+          heuristic: { total: 80 },
           source: 'timestamp',
         });
         broadcast({ type: 'log', level: 'info', msg: `   ⏱️ Timestamp clip: ${ts.start}s → ${ts.end}s (${Math.round(ts.end - ts.start)}s)` });
       }
     }
 
-    // ─── Step 4c: Process Description Clips ───────────
-    const descriptionClips = [];
-    if (hasDescription && scoredChunks.length > 0) {
-      broadcast({ type: 'log', level: 'info', msg: `📝 Searching for clips matching: "${description}"` });
-
-      // Try AI matching first
-      let matchedIndices = await matchChunksByDescription(
-        description, scoredChunks, config.ollamaUrl, config.model
-      );
-
-      if (matchedIndices.length > 0) {
-        broadcast({ type: 'log', level: 'success', msg: `✅ AI found ${matchedIndices.length} matching segments` });
-      } else {
-        // Fallback to keyword matching
-        broadcast({ type: 'log', level: 'info', msg: '   AI match returned no results, trying keyword search...' });
-        matchedIndices = matchChunksByKeywords(description, scoredChunks);
-        if (matchedIndices.length > 0) {
-          broadcast({ type: 'log', level: 'success', msg: `✅ Keyword search found ${matchedIndices.length} matching segments` });
-        } else {
-          broadcast({ type: 'log', level: 'warning', msg: '⚠️ No segments matched the description' });
-        }
-      }
-
-      for (const idx of matchedIndices) {
-        const sc = scoredChunks[idx];
-        if (sc) {
-          descriptionClips.push({
-            ...sc,
-            source: 'description',
-          });
-        }
-      }
-    }
-
-    checkStopped('description-matching');
-
-    // ─── Step 5: AI Ranking with Ollama ───────────────
+    // ─── Step 5: AI Clip Selection ───────────────────
     let aiClips = [];
 
     if (!onlyManual) {
-      broadcast({ type: 'step', step: 'rank', status: 'active' });
-      broadcast({ type: 'log', level: 'info', msg: `🧠 Querying Ollama (${config.model}) for ${genre || 'auto'} virality ranking...` });
+      // Calculate target number of clips (custom count or dynamic based on video length)
+      const transcriptDuration = transcript?.duration || (transcript.segments?.length > 0 ? transcript.segments[transcript.segments.length - 1].end : 300);
+      const videoMinutes = Math.max(1, transcriptDuration / 60);
+      const dynamicAutoClips = Math.max(3, Math.min(30, Math.round(videoMinutes * 1.5)));
+      const parsedCount = parseInt(clipCount, 10);
+      const targetClips = (!isNaN(parsedCount) && parsedCount > 0)
+        ? parsedCount
+        : (config.clips > 0 ? config.clips : dynamicAutoClips);
 
-      const genrePrompt = genre && genre !== 'auto'
-        ? `Focus heavily on ${genre} content. Only select clips that match the "${genre}" genre.`
-        : '';
+      broadcast({ type: 'step', step: 'analyze', status: 'active' });
+      broadcast({ type: 'log', level: 'info', msg: `📊 Finding top ${targetClips} viral clips for ${genre || 'auto-detected'} genre...` });
 
-      const ranked = await rankChunks(
-        scoredChunks,
-        config.clips + 3,
-        config.ollamaUrl,
-        config.model,
-        genrePrompt
-      );
+      try {
+        const selectedClipCandidates = await selectClips(transcript, genre || 'default', targetClips, {
+          ollamaUrl: config.ollamaUrl,
+          model: config.model,
+          description: description,
+          onLog: (msg) => broadcast({ type: 'log', level: 'info', msg: `   ${msg}` }),
+        });
 
-      const selected = selectClips(ranked, scoredChunks, config.clips, config.minLength, config.maxLength);
+        // Convert ClipCandidate to pipeline's internal format
+        aiClips = selectedClipCandidates.map((clip, i) => ({
+          index: i,
+          chunk: {
+            start: clip.start,
+            end: clip.end,
+            text: clip.text,
+            words: clip.words || [],
+          },
+          heuristic: clip.scoreBreakdown?.heuristic || { total: clip.heuristicScore || 50 },
+          aiScore: clip.llmScore,
+          combinedScore: clip.combinedScore,
+          aiTitle: clip.hookCaption || '',
+          aiReason: clip.justification || '',
+          source: 'ai',
+        }));
 
-      if (selected.length === 0) {
-        // Fallback: use top heuristic clips
-        broadcast({ type: 'log', level: 'warning', msg: '⚠️  AI ranking returned no clips, using heuristic fallback...' });
-        const fallback = [...scoredChunks]
-          .sort((a, b) => b.heuristic.total - a.heuristic.total)
-          .slice(0, config.clips);
-        aiClips = fallback.map(c => ({ ...c, source: 'ai' }));
-      } else {
-        aiClips = selected.map(c => ({ ...c, source: 'ai' }));
+        broadcast({ type: 'log', level: 'success', msg: `✅ AI selected ${aiClips.length} viral clips!` });
+      } catch (e) {
+        const activeProvider = aiRegistry.getLLMProvider();
+        broadcast({
+          type: 'error',
+          errorCode: e.message.includes('timed out') ? 'AI_TIMEOUT' : 'AI_CONNECTION',
+          msg: `AI ranking via ${activeProvider.name} failed: ${e.message}`,
+          step: 'analyze',
+          recoverable: true,
+        });
+        broadcast({ type: 'log', level: 'warning', msg: '⚠️ Falling back to deterministic heuristic-only mode...' });
+
+        // Heuristic fallback: use segmenter + scorer without LLM
+        try {
+          const { generateCandidateSegments } = await import('./segmenter.js');
+          const { scoreSegments } = await import('./scorer.js');
+
+          const candidates = generateCandidateSegments(transcript);
+          const scored = scoreSegments(candidates, genre || 'default');
+          const topScored = [...scored].sort((a, b) => b.heuristic.total - a.heuristic.total).slice(0, targetClips);
+
+          aiClips = topScored.map((seg, i) => ({
+            index: i,
+            chunk: { start: seg.start, end: seg.end, text: seg.text, words: seg.words || [] },
+            heuristic: seg.heuristic,
+            aiScore: null,
+            combinedScore: seg.heuristic.total,
+            aiTitle: '',
+            aiReason: `Heuristic: ${seg.breakdownStr}`,
+            source: 'ai',
+          }));
+        } catch (fallbackErr) {
+          broadcast({ type: 'log', level: 'error', msg: `Heuristic fallback also failed: ${fallbackErr.message}` });
+        }
       }
 
-      broadcast({ type: 'log', level: 'success', msg: `✅ AI selected top ${aiClips.length} viral clips!` });
+      broadcast({ type: 'step', step: 'analyze', status: 'done' });
       broadcast({ type: 'step', step: 'rank', status: 'done' });
     } else {
       // Skip AI ranking in "only" mode
+      broadcast({ type: 'step', step: 'analyze', status: 'done' });
       broadcast({ type: 'step', step: 'rank', status: 'done' });
       broadcast({ type: 'log', level: 'info', msg: '⏭️ Skipping AI ranking (manual/description-only mode)' });
     }
 
     checkStopped('ranking');
 
-    // ─── Step 5b: Combine & Deduplicate ──────────────
+    // ─── Step 6: Combine & Deduplicate ──────────────
     let allSelected = [];
 
     if (onlyManual) {
-      // Only manual clips
-      allSelected = [...timestampClips, ...descriptionClips];
-      broadcast({ type: 'log', level: 'info', msg: `📋 Using ${allSelected.length} manual/description clip(s) only` });
+      allSelected = [...timestampClips];
+      
+      // ✅ Deduplicate manual selections (O(n log n))
+      if (allSelected.length > 1) {
+        const forDedup = allSelected.map(c => ({
+          ...c,
+          start: c.chunk.start,
+          end: c.chunk.end,
+        }));
+        const deduped = deduplicateClips(forDedup);
+        if (allSelected.length !== deduped.length) {
+          broadcast({ 
+            type: 'log', 
+            level: 'info', 
+            msg: `   Deduplicated: ${allSelected.length} → ${deduped.length} manual clips (removed ${allSelected.length - deduped.length} overlaps)` 
+          });
+        }
+        allSelected = deduped;
+      }
+      
+      broadcast({ type: 'log', level: 'info', msg: `📋 Using ${allSelected.length} manual timestamp clip(s) only` });
+
+      if (allSelected.length === 0) {
+        broadcast({
+          type: 'error',
+          errorCode: 'NO_MANUAL_CLIPS_FOUND',
+          msg: 'No clips found from your timestamps. Please provide valid timestamp ranges.',
+          step: 'rank',
+          recoverable: true,
+        });
+        broadcast({ type: 'done' });
+        return;
+      }
     } else {
-      // Combine: timestamp + description + AI, then deduplicate
-      allSelected = [...timestampClips, ...descriptionClips, ...aiClips];
-      if (timestampClips.length > 0 || descriptionClips.length > 0) {
+      // 'add' mode: Combine timestamps + AI clips
+      allSelected = [...timestampClips, ...aiClips];
+      
+      if (timestampClips.length > 0) {
         const before = allSelected.length;
-        // Build dedup-friendly format
         const forDedup = allSelected.map(c => ({
           ...c,
           start: c.chunk.start,
@@ -396,50 +494,27 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
           broadcast({ type: 'log', level: 'info', msg: `   Deduplicated: ${before} → ${deduped.length} clips (removed overlaps)` });
         }
       }
-    }
 
-    if (allSelected.length === 0) {
-      broadcast({ type: 'log', level: 'warning', msg: '⚠️ No clips to process. Try different timestamps or description.' });
-      // Ultimate fallback — top heuristic clips
-      allSelected = [...scoredChunks]
-        .sort((a, b) => b.heuristic.total - a.heuristic.total)
-        .slice(0, config.clips)
-        .map(c => ({ ...c, source: 'ai' }));
+      if (allSelected.length === 0) {
+        broadcast({ type: 'log', level: 'warning', msg: '⚠️ No clips found — please try a different video or genre.' });
+        broadcast({ type: 'done' });
+        return;
+      }
     }
 
     pipeline.selected = allSelected;
     broadcast({ type: 'log', level: 'success', msg: `✅ Total clips for review: ${allSelected.length}` });
 
-    // ─── Step 6: Generate Social Media Content ────────
-    broadcast({ type: 'log', level: 'info', msg: '✍️  Generating social media content for each clip...' });
+    // ─── Step 7: Build clip metadata (lazy social content) ──
+    // Social content (description, hashtags) is generated lazily
+    // during render — not here — to cut analysis time by ~15-25s.
+    const clipsWithMeta = allSelected.map((clip, i) => {
+      // Use hookCaption from the LLM ranker if available, else derive from text
+      const title = clip.aiTitle
+        || (clip.chunk.text || '').split(/[.!?]/)[0]?.trim().slice(0, 60)
+        || `Clip ${i + 1}`;
 
-    const clipsWithMeta = [];
-    for (let i = 0; i < allSelected.length; i++) {
-      const clip = allSelected[i];
-      checkStopped('social-content');
-
-      broadcast({ type: 'log', level: 'info', msg: `   Generating content for clip ${i + 1}/${allSelected.length}...` });
-
-      let social;
-      try {
-        social = await generateSocialContent(
-          clip.chunk.text,
-          genre,
-          transcript.language,
-          config.ollamaUrl,
-          config.model
-        );
-      } catch (e) {
-        // Fallback if Ollama fails for this clip
-        social = {
-          title: (clip.chunk.text || '').slice(0, 60) + '...',
-          description: `Check out this ${genre || 'amazing'} clip! 🔥 Don't forget to follow for more!`,
-          hashtags: '#shorts #viral #trending #fyp #explore #reels',
-          caption: (clip.chunk.text || '').slice(0, 100),
-        };
-      }
-
-      clipsWithMeta.push({
+      return {
         index: i,
         start: clip.chunk.start,
         end: clip.chunk.end,
@@ -448,17 +523,25 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
         words: clip.chunk.words || [],
         score: clip.aiScore || clip.combinedScore || Math.round((clip.heuristic?.total || 50) / 10),
         heuristic: clip.heuristic || { total: 50 },
-        title: social.title,
-        description: social.description,
-        hashtags: social.hashtags,
-        caption: social.caption,
+        aiReason: clip.aiReason || '',
+        title,
+        description: '',   // Generated lazily at render time
+        hashtags: '',       // Generated lazily at render time
+        caption: (clip.chunk.text || '').slice(0, 100),
         language: transcript.language || 'unknown',
         source: clip.source || 'ai',
-      });
-    }
+        aspectRatio: defaultRatio || '9:16',
+        zoom: (() => {
+          const parsed = Number(defaultZoom);
+          return Number.isFinite(parsed) ? Math.min(3.0, Math.max(0.1, parsed)) : 1.0;
+        })(),
+        exportQuality: exportQuality || 'balanced',
+      };
+    });
 
     pipeline.clipsWithMeta = clipsWithMeta;
-    broadcast({ type: 'log', level: 'success', msg: `✅ Social content ready for ${clipsWithMeta.length} clips` });
+    pipeline.genre = genre;
+    broadcast({ type: 'log', level: 'success', msg: `✅ ${clipsWithMeta.length} clips ready for review` });
 
     // ─── Send Clips to Frontend for Review ────────────
     broadcast({
@@ -470,7 +553,7 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
 
   } catch (err) {
     if (err.message === 'PIPELINE_CANCELLED') {
-      broadcast({ type: 'stopped' });
+      // Already broadcast appropriate error/stopped messages above
     } else {
       throw err;
     }

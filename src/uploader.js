@@ -4,6 +4,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { getYouTubeToken, getInstagramToken } from './auth.js';
 
 // ─── Template Variable Substitution ──────────
@@ -22,6 +23,71 @@ function applyTemplate(template, clip, clipIndex) {
     .replace(/\{clipNum\}/gi, String(clipIndex + 1));
 }
 
+// ─── YouTube Daily Upload Quota Tracker ──────
+// YouTube Data API v3 costs 1,600 units per upload.
+// The daily quota is 10,000 units, so max ~6 uploads per day.
+
+const YOUTUBE_DAILY_QUOTA = 10000;
+const YOUTUBE_UPLOAD_COST = 1600;
+const MAX_UPLOADS_PER_DAY = Math.floor(YOUTUBE_DAILY_QUOTA / YOUTUBE_UPLOAD_COST); // = 6
+
+const QUOTA_FILE = path.join(os.homedir(), '.skate', 'yt_quota.json');
+
+function getTodayKey() {
+  // YouTube quota resets at midnight Pacific Time (UTC-8 / UTC-7 DST)
+  const now = new Date();
+  const pacific = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  return `${pacific.getFullYear()}-${String(pacific.getMonth() + 1).padStart(2, '0')}-${String(pacific.getDate()).padStart(2, '0')}`;
+}
+
+function loadQuotaData() {
+  try {
+    if (fs.existsSync(QUOTA_FILE)) {
+      return JSON.parse(fs.readFileSync(QUOTA_FILE, 'utf8'));
+    }
+  } catch (e) { /* ignore */ }
+  return {};
+}
+
+function saveQuotaData(data) {
+  try {
+    fs.mkdirSync(path.dirname(QUOTA_FILE), { recursive: true });
+    fs.writeFileSync(QUOTA_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) { /* ignore */ }
+}
+
+/**
+ * Get today's YouTube upload stats (pacific time reset)
+ * @returns {{ uploadsToday: number, unitsUsed: number, unitsRemaining: number, maxUploads: number, resetKey: string }}
+ */
+export function getYouTubeQuotaStatus() {
+  const data = loadQuotaData();
+  const today = getTodayKey();
+  const uploadsToday = data[today] || 0;
+  const unitsUsed = uploadsToday * YOUTUBE_UPLOAD_COST;
+  return {
+    uploadsToday,
+    unitsUsed,
+    unitsRemaining: Math.max(0, YOUTUBE_DAILY_QUOTA - unitsUsed),
+    maxUploads: MAX_UPLOADS_PER_DAY,
+    resetKey: today,
+    isAtLimit: uploadsToday >= MAX_UPLOADS_PER_DAY,
+  };
+}
+
+function incrementYouTubeUploadCount() {
+  const data = loadQuotaData();
+  const today = getTodayKey();
+  data[today] = (data[today] || 0) + 1;
+  // Clean old keys (keep only last 7 days)
+  const keys = Object.keys(data).sort().reverse();
+  if (keys.length > 7) {
+    keys.slice(7).forEach(k => delete data[k]);
+  }
+  saveQuotaData(data);
+  return data[today];
+}
+
 // ─── YouTube Shorts Upload ───────────────────
 
 /**
@@ -38,27 +104,53 @@ function applyTemplate(template, clip, clipIndex) {
 export async function uploadToYouTube(filePath, metadata, clip, clipIndex, onProgress) {
   const accessToken = await getYouTubeToken();
   if (!accessToken) {
-    return { success: false, error: 'YouTube not connected or token expired' };
+    return { success: false, error: 'YouTube not connected or token expired. Please reconnect.' };
   }
 
+  // ─── Daily Quota Pre-Check ─────────────────
+  const quotaStatus = getYouTubeQuotaStatus();
+  if (quotaStatus.isAtLimit) {
+    const msg = `YouTube daily upload limit reached (${quotaStatus.uploadsToday}/${quotaStatus.maxUploads} uploads used today). Quota resets at midnight Pacific Time.`;
+    onProgress?.(`⛔ ${msg}`);
+    return { success: false, error: msg, quotaExceeded: true };
+  }
+
+  onProgress?.(`📊 YouTube quota: ${quotaStatus.uploadsToday}/${quotaStatus.maxUploads} uploads used today (${quotaStatus.unitsRemaining} units remaining)`);
+
   try {
-    // Apply templates
-    let title = applyTemplate(metadata.title, clip, clipIndex) || clip.title || `Clip ${clipIndex + 1}`;
-    let description = applyTemplate(metadata.description, clip, clipIndex) || clip.description || '';
-    const tagsStr = applyTemplate(metadata.tags, clip, clipIndex) || '';
-    const tags = tagsStr.split(',').map(t => t.trim()).filter(Boolean);
+    // Resolve file path (support both absolute and relative paths)
+    let resolvedPath = filePath;
+    if (!path.isAbsolute(filePath)) {
+      resolvedPath = path.resolve(filePath);
+    }
+
+    // Verify file exists before attempting upload
+    if (!fs.existsSync(resolvedPath)) {
+      throw new Error(`Video file not found at: ${resolvedPath}`);
+    }
+
+    // Apply templates with safe defaults
+    const meta = metadata || {};
+    let title = (meta.title ? applyTemplate(meta.title, clip, clipIndex) : null) || clip.title || `Clip ${clipIndex + 1}`;
+    let description = (meta.description ? applyTemplate(meta.description, clip, clipIndex) : null) || clip.description || (clip.caption ? `${clip.caption}\n\n${clip.hashtags || ''}` : '');
+    const tagsStr = (meta.tags ? applyTemplate(meta.tags, clip, clipIndex) : null) || clip.hashtags || '';
+    const tags = tagsStr.replace(/#/g, '').split(/[,\s]+/).map(t => t.trim()).filter(Boolean);
 
     // Ensure #Shorts is in the title for YouTube Shorts
     if (!title.toLowerCase().includes('#shorts')) {
       title = `${title} #Shorts`;
     }
 
-    // Ensure title is within limits
-    title = title.slice(0, 100);
+    // Ensure title is within limits (trim BEFORE adding #Shorts to avoid exceeding 100)
+    const baseTitle = title.replace(/ #Shorts$/i, '').slice(0, 85);
+    title = baseTitle.toLowerCase().includes('#shorts') ? baseTitle : `${baseTitle} #Shorts`;
     description = description.slice(0, 5000);
 
-    const madeForKids = metadata.audience === 'kids';
-    const privacyStatus = metadata.visibility || 'public';
+    const madeForKids = meta.audience === 'kids';
+    const privacyStatus = meta.visibility || 'public';
+
+    const fileBuffer = fs.readFileSync(resolvedPath);
+    const fileSize = fileBuffer.length;
 
     // Step 1: Initialize resumable upload
     onProgress?.(`📤 Initializing YouTube upload for clip ${clipIndex + 1}...`);
@@ -84,25 +176,28 @@ export async function uploadToYouTube(filePath, metadata, clip, clipIndex, onPro
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json; charset=UTF-8',
           'X-Upload-Content-Type': 'video/mp4',
-          'X-Upload-Content-Length': fs.statSync(filePath).size.toString(),
+          'X-Upload-Content-Length': fileSize.toString(),
         },
         body: JSON.stringify(videoMetadata),
       }
     );
 
     if (!initRes.ok) {
-      const err = await initRes.text();
-      throw new Error(`YouTube upload init failed: ${err}`);
+      const errText = await initRes.text();
+      // Check for quota exceeded specifically
+      if (initRes.status === 403 && (errText.includes('quotaExceeded') || errText.includes('forbidden'))) {
+        const msg = `YouTube API daily quota exceeded. You have used all 10,000 units for today. Quota resets at midnight Pacific Time.`;
+        onProgress?.(`⛔ ${msg}`);
+        return { success: false, error: msg, quotaExceeded: true };
+      }
+      throw new Error(`YouTube upload init failed: ${errText}`);
     }
 
     const uploadUrl = initRes.headers.get('location');
     if (!uploadUrl) throw new Error('No upload URL returned from YouTube');
 
-    // Step 2: Upload the video file
-    onProgress?.(`⬆️  Uploading video to YouTube...`);
-
-    const fileBuffer = fs.readFileSync(filePath);
-    const fileSize = fileBuffer.length;
+    // Step 2: Upload the video file (using Buffer for 100% reliable PUT transfer)
+    onProgress?.(`⬆️  Uploading video to YouTube (${(fileSize / 1024 / 1024).toFixed(1)} MB)...`);
 
     const uploadRes = await fetch(uploadUrl, {
       method: 'PUT',
@@ -114,19 +209,31 @@ export async function uploadToYouTube(filePath, metadata, clip, clipIndex, onPro
     });
 
     if (!uploadRes.ok) {
-      const err = await uploadRes.text();
-      throw new Error(`YouTube upload failed: ${err}`);
+      const errText = await uploadRes.text();
+      if (uploadRes.status === 403 && errText.includes('quotaExceeded')) {
+        return {
+          success: false,
+          error: 'YouTube API daily quota exceeded. Resets at midnight Pacific Time.',
+          quotaExceeded: true,
+        };
+      }
+      throw new Error(`YouTube upload failed: ${errText}`);
     }
 
     const uploadData = await uploadRes.json();
     const videoId = uploadData.id;
 
+    // ─── Track successful upload ───────────
+    const totalToday = incrementYouTubeUploadCount();
+    const remaining = MAX_UPLOADS_PER_DAY - totalToday;
     onProgress?.(`✅ YouTube upload complete! Video ID: ${videoId}`);
+    onProgress?.(`📊 Daily uploads: ${totalToday}/${MAX_UPLOADS_PER_DAY} used. ${remaining} upload${remaining !== 1 ? 's' : ''} remaining today.`);
 
     return {
       success: true,
       videoId,
       url: `https://youtube.com/shorts/${videoId}`,
+      quotaStatus: getYouTubeQuotaStatus(),
     };
   } catch (err) {
     onProgress?.(`❌ YouTube upload failed: ${err.message}`);
@@ -150,7 +257,23 @@ export async function uploadToYouTube(filePath, metadata, clip, clipIndex, onPro
 export async function uploadToInstagram(fileUrl, metadata, clip, clipIndex, onProgress) {
   const igAuth = getInstagramToken();
   if (!igAuth) {
-    return { success: false, error: 'Instagram not connected or token expired' };
+    return { success: false, error: 'Instagram not connected or token expired. Please reconnect.' };
+  }
+
+  // ─── Localhost Detection ──────────────────
+  // Instagram Graph API requires a publicly accessible URL.
+  // localhost/127.0.0.1 will always fail.
+  if (fileUrl.includes('localhost') || fileUrl.includes('127.0.0.1')) {
+    const msg = 'Instagram requires a public URL for video uploads. localhost is not accessible from Meta servers. Use a tunnel (ngrok, Cloudflare Tunnel) to expose your local server to the internet.';
+    onProgress?.(`⚠️  ${msg}`);
+    return { success: false, error: msg, localUrlError: true };
+  }
+
+  // ─── Business Account Check ───────────────
+  if (!igAuth.igUserId) {
+    const msg = 'Instagram Business/Creator Account not found. Your Instagram account must be a Business or Creator account linked to a Facebook Page. Personal accounts cannot publish via API.';
+    onProgress?.(`⛔ ${msg}`);
+    return { success: false, error: msg, noBusinessAccount: true };
   }
 
   const { accessToken, igUserId } = igAuth;
@@ -297,14 +420,32 @@ export async function publishClips(clips, files, workflow, rootDir, broadcast) {
 
     // ─── YouTube Upload ─────────────────────
     if (workflow.youtube) {
-      const filePath = path.join(rootDir, fileRelativePath.replace(/^\//, ''));
+      let filePath = path.isAbsolute(fileRelativePath)
+        ? fileRelativePath
+        : path.join(rootDir, fileRelativePath.replace(/^\//, ''));
+
+      if (!fs.existsSync(filePath)) {
+        // Fallback: check output dir
+        const cleanRel = fileRelativePath.replace(/^\/?(output\/)?/, '');
+        const fallback = path.join(rootDir, 'output', cleanRel);
+        if (fs.existsSync(fallback)) filePath = fallback;
+      }
 
       if (fs.existsSync(filePath)) {
         broadcast({ type: 'log', level: 'info', msg: `📺 Uploading clip ${i + 1}/${totalClips} to YouTube...` });
 
+        // Gather fallback metadata from clip if workflow is incomplete
+        const finalMetadata = {
+          title: workflow.youtube.title || clip.title || `Clip ${i + 1}`,
+          description: workflow.youtube.description || clip.description || clip.caption || '',
+          tags: workflow.youtube.tags || clip.hashtags || '',
+          visibility: workflow.youtube.visibility || 'public',
+          audience: workflow.youtube.audience || 'general',
+        };
+
         clipResult.youtube = await uploadToYouTube(
           filePath,
-          workflow.youtube,
+          finalMetadata,
           clip,
           i,
           (msg) => broadcast({ type: 'log', level: 'info', msg: `   ${msg}` })

@@ -12,7 +12,7 @@ const els = {
   form: $('#process-form'),
   sourceInput: $('#source-input'),
   genreSelect: $('#genre-select'),
-  generateBtn: $('#generate-btn'),
+  generateBtn: $('#generate-btn') || $('#process-btn'),
   stopBtn: $('#stop-btn'),
   inputHint: $('#input-hint'),
   // Save Path
@@ -33,7 +33,7 @@ const els = {
   workspaceYtIframe: $('#workspace-yt-iframe'),
   workspaceLocalVideo: $('#workspace-local-video'),
   // Pipeline
-  pipelineSection: $('#pipeline-section'),
+  pipelineSection: $('#pipeline-section') || $('#progress-section'),
   pipelineTimer: $('#pipeline-timer'),
   terminal: $('#terminal'),
   clearTerminal: $('#clear-terminal'),
@@ -82,15 +82,33 @@ const els = {
   editorValSharpen: $('#editor-val-sharpen'),
   editorValRatio: $('#editor-val-ratio'),
   editorValCaptions: $('#editor-val-captions'),
+  // Caption Studio & Comparison View
+  editorViewModeToggle: $('#editor-view-mode-toggle'),
+  stageViewB: $('#stage-view-b'),
+  editorVideoB: $('#editor-video-b'),
+  editorCaptionBoxB: $('#editor-caption-box-b'),
+  editorCaptionOverlayB: $('#editor-caption-overlay-b'),
+  editorComparePresetSelect: $('#editor-compare-preset-select'),
+  btnUseStyleB: $('#btn-use-style-b'),
+  stageBadgeAText: $('#stage-badge-a-text'),
+  editorMarginV: $('#editor-margin-v'),
+  editorMarginVVal: $('#editor-margin-v-val'),
+  editorSafeZoneStatus: $('#editor-safe-zone-status'),
+  editorApplyAllBtn: $('#editor-apply-all'),
   // Volume Controls
   volumeToggle: $('#volume-toggle'),
   volumeSlider: $('#volume-slider'),
   // Ratio Selector
   ratioSelector: $('#ratio-selector'),
   // Advanced Options (now in workspace)
-  advDescription: $('#adv-description'),
   timestampRows: $('#timestamp-rows'),
   btnAddTs: $('#btn-add-ts'),
+  tsStart: $('#ts-start'),
+  tsEnd: $('#ts-end'),
+  tsAddBtn: $('#ts-add-btn'),
+  tsChipList: $('#ts-chip-list'),
+  tsOnlyToggle: $('#ts-only-toggle'),
+  tsModeToggle: $('#ts-mode-toggle'),
   // Publish Section
   publishSection: $('#publish-section'),
   btnConnectIg: $('#btn-connect-ig'),
@@ -98,6 +116,21 @@ const els = {
   igStatus: $('#ig-status'),
   ytStatus: $('#yt-status'),
   btnPublish: $('#btn-publish'),
+  // Pre-Generate Ratio & Zoom
+  preGenPreview: $('#pre-gen-preview'),
+  preGenOverlay: $('#pre-gen-overlay'),
+  preGenLabel: $('#pre-gen-label'),
+  preGenRatioBtns: $('#pre-gen-ratio-btns'),
+  preGenZoom: $('#pre-gen-zoom'),
+  preGenZoomVal: $('#pre-gen-zoom-val'),
+  qualitySelectorBtns: $('#quality-selector-btns'),
+  // Error panel
+  errorPanel: $('#error-panel'),
+  errorPanelTitle: $('#error-panel-title'),
+  errorPanelMsg: $('#error-panel-msg'),
+  errorPanelFix: $('#error-panel-fix'),
+  errorPanelActions: $('#error-panel-actions'),
+  errorPanelClose: $('#error-panel-close'),
 };
 
 // ─── State ───────────────────────────────────
@@ -108,39 +141,117 @@ let pipelineTimerInterval = null;
 let pipelineStartTime = null;
 let detectedLanguage = 'unknown';
 let videoInfoTimeout = null;
-let currentEditorRatio = '1:1';
+let currentEditorRatio = '9:16';
 let editorReRenderIndex = -1;
 let customOutputDir = '';
 let currentVideoTitle = '';
+let preGenRatio = '9:16';
+let preGenZoom = 1.0;
+let clipCount = 'auto';
+let videoQuality = 'best'; // Video download quality profile
+let exportQuality = 'balanced'; // Export encoding profile
+let currentCaptionPreset = 'bold'; // Active selected caption preset
+let comparisonCaptionPreset = 'karaoke'; // Side-by-side comparison preset
+let captionCustomSettings = {
+  fontFamily: 'Montserrat',
+  fontSize: 38,
+  textColor: '#ffffff',
+  highlightColor: '#fee440',
+  bottomMargin: 140,
+  wordsPerLine: 'short',
+  captionsEnabled: true
+};
+
+// ✅ NEW: Session tracking
+let currentSessionId = generateSessionId();
+let pipelineRunning = false;
+
+function generateSessionId() {
+  // Create unique session ID per page load
+  return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+function saveSessionId() {
+  localStorage.setItem('l2s_session_id', currentSessionId);
+}
+
+async function restoreSessionId() {
+  const saved = localStorage.getItem('l2s_session_id');
+  if (saved) {
+    try {
+      // Check if session is still active
+      const statusRes = await fetch(`/api/session-status/${saved}`);
+      if (statusRes.ok) {
+        const data = await statusRes.json();
+        if (data.active && data.state === 'running') {
+          // Session still running, warn user
+          showToast('⚠️ Previous pipeline still running. Click Stop or wait.', 'warning');
+          // Don't reuse this session ID
+          currentSessionId = generateSessionId();
+        }
+      }
+    } catch (e) {
+      // Server unreachable, safe to use new session
+      currentSessionId = generateSessionId();
+    }
+  }
+  return currentSessionId;
+}
+
+// On page load
+window.addEventListener('load', async () => {
+  await restoreSessionId();
+  saveSessionId();
+});
+
+// ─── Save session on unload ──────────────
+window.addEventListener('beforeunload', () => {
+  if (pipelineRunning) {
+    // Use navigator.sendBeacon for reliability
+    navigator.sendBeacon('/api/stop', JSON.stringify({ sessionId: currentSessionId }));
+  }
+});
 
 // ─── WebSocket ───────────────────────────────
 let socket = null;
 let reconnectTimeout = null;
 
 function connectWebSocket() {
-  socket = new WebSocket(`ws://${window.location.host}/ws`);
+  if (!window.location.host) return; // Prevent connecting if opened via file:// protocol
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
-  socket.onopen = () => {
-    els.connectionDot.className = 'status-dot connected';
-    els.connectionText.textContent = 'Connected';
-  };
+  try {
+    socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
 
-  socket.onclose = () => {
-    els.connectionDot.className = 'status-dot disconnected';
-    els.connectionText.textContent = 'Disconnected';
+    socket.onopen = () => {
+      if (els.connectionDot) els.connectionDot.className = 'status-dot connected';
+      if (els.connectionText) els.connectionText.textContent = 'Connected';
+    };
+
+    socket.onclose = () => {
+      if (els.connectionDot) els.connectionDot.className = 'status-dot disconnected';
+      if (els.connectionText) els.connectionText.textContent = 'Disconnected';
+      clearTimeout(reconnectTimeout);
+      reconnectTimeout = setTimeout(connectWebSocket, 3000);
+    };
+
+    socket.onerror = () => {
+      if (els.connectionDot) els.connectionDot.className = 'status-dot disconnected';
+      if (els.connectionText) els.connectionText.textContent = 'Disconnected';
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        handleMessage(data);
+      } catch (err) {
+        console.warn('Malformed WS message:', err);
+      }
+    };
+  } catch (e) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = setTimeout(connectWebSocket, 3000);
-  };
-
-  socket.onerror = () => {
-    els.connectionDot.className = 'status-dot disconnected';
-    els.connectionText.textContent = 'Error';
-  };
-
-  socket.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    handleMessage(data);
-  };
+  }
 }
 
 connectWebSocket();
@@ -175,6 +286,27 @@ function handleMessage(data) {
       showResultsSection(renderedFiles);
       break;
 
+    case 'social_content': {
+      // Lazy social content arrived — update clip data and refresh result card
+      const ci = data.clipIndex;
+      if (ci >= 0 && allClips[ci]) {
+        if (data.title) allClips[ci].title = data.title;
+        if (data.description) allClips[ci].description = data.description;
+        if (data.hashtags) allClips[ci].hashtags = data.hashtags;
+        if (data.caption) allClips[ci].caption = data.caption;
+
+        // Refresh the result card's social blocks if visible
+        const card = els.resultsList?.querySelector(`[data-result-index="${ci}"]`);
+        if (card) {
+          const descEl = card.querySelector('.social-block-content');
+          if (descEl) descEl.textContent = data.description || descEl.textContent;
+          const tagEl = card.querySelector('.social-block-hashtags');
+          if (tagEl) tagEl.textContent = data.hashtags || tagEl.textContent;
+        }
+      }
+      break;
+    }
+
     case 're_render_done': {
       const { clipIndex, fileUrl } = data;
       if (fileUrl && clipIndex >= 0) {
@@ -196,23 +328,33 @@ function handleMessage(data) {
 
     case 'done':
       stopTimer();
+      pipelineRunning = false;
       setProcessingState(false);
       break;
 
     case 'stopped':
       stopTimer();
+      pipelineRunning = false;
       setProcessingState(false);
       appendLog('Pipeline stopped.', 'warning');
       showToast('Pipeline cancelled', 'info');
       break;
 
-    case 'error':
-      appendLog(`Error: ${data.msg}`, 'error');
+    case 'error': {
+      const errMsg = data.msg || 'An unknown error occurred';
+      appendLog(`Error: ${errMsg}`, 'error');
+      pipelineRunning = false;
       setProcessingState(false);
       stopTimer();
       if (data.step) updateStep(data.step, 'error');
-      showToast('Pipeline error occurred', 'error');
+      // Only treat non-recoverable errors as full failures in the UI
+      if (!data.recoverable) {
+        showErrorPanel(data.errorCode, errMsg);
+      } else {
+        showToast(errMsg, 'error');
+      }
       break;
+    }
 
     case 'connection_update': {
       const { platform, connected, username } = data;
@@ -262,34 +404,41 @@ els.clearTerminal.addEventListener('click', () => {
 
 // ─── Pipeline Steps ──────────────────────────
 function updateStep(stepId, status) {
-  const stepEl = $(`.step[data-step="${stepId}"]`);
-  if (!stepEl) return;
+  const stepEls = document.querySelectorAll(`[data-step="${stepId}"]`);
+  if (!stepEls || stepEls.length === 0) return;
 
-  stepEl.classList.remove('active', 'done', 'error');
-  stepEl.classList.add(status);
+  stepEls.forEach(stepEl => {
+    stepEl.classList.remove('active', 'done', 'error');
+    stepEl.classList.add(status);
 
-  const statusText = stepEl.querySelector('.step-status');
-  const labels = { active: 'PROCESSING', done: 'COMPLETED', error: 'FAILED' };
-  statusText.textContent = labels[status] || 'WAITING';
+    const statusText = stepEl.querySelector('.step-status');
+    if (statusText) {
+      const labels = { active: 'PROCESSING', done: 'COMPLETED', error: 'FAILED' };
+      statusText.textContent = labels[status] || 'WAITING';
+    }
+  });
 }
 
 function resetSteps() {
-  $$('.step').forEach(el => {
+  document.querySelectorAll('.step, .step-card, [data-step]').forEach(el => {
     el.classList.remove('active', 'done', 'error');
-    el.querySelector('.step-status').textContent = 'WAITING';
+    const statusText = el.querySelector('.step-status');
+    if (statusText) statusText.textContent = 'WAITING';
   });
 }
 
 // ─── Timer ───────────────────────────────────
 function startTimer() {
   pipelineStartTime = Date.now();
-  els.pipelineTimer.textContent = '00:00';
+  const timerEl = els.pipelineTimer || document.getElementById('pipeline-timer');
+  if (timerEl) timerEl.textContent = '00:00';
   clearInterval(pipelineTimerInterval);
   pipelineTimerInterval = setInterval(() => {
     const elapsed = Math.floor((Date.now() - pipelineStartTime) / 1000);
     const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
     const secs = String(elapsed % 60).padStart(2, '0');
-    els.pipelineTimer.textContent = `${mins}:${secs}`;
+    const t = els.pipelineTimer || document.getElementById('pipeline-timer');
+    if (t) t.textContent = `${mins}:${secs}`;
   }, 1000);
 }
 
@@ -299,16 +448,23 @@ function stopTimer() {
 
 // ─── Processing State ────────────────────────
 function setProcessingState(isProcessing) {
+  const genBtn = els.generateBtn || document.getElementById('generate-btn') || document.getElementById('process-btn');
+  const stpBtn = els.stopBtn || document.getElementById('stop-btn');
+
   if (isProcessing) {
-    els.generateBtn.classList.add('hidden');
-    els.stopBtn.classList.add('visible');
-    els.sourceInput.disabled = true;
-    els.genreSelect.disabled = true;
+    genBtn?.classList.add('hidden');
+    stpBtn?.classList.add('visible');
+    if (stpBtn) stpBtn.style.display = 'flex';
+    if (genBtn) genBtn.style.display = 'none';
+    if (els.sourceInput) els.sourceInput.disabled = true;
+    if (els.genreSelect) els.genreSelect.disabled = true;
   } else {
-    els.generateBtn.classList.remove('hidden');
-    els.stopBtn.classList.remove('visible');
-    els.sourceInput.disabled = false;
-    els.genreSelect.disabled = false;
+    genBtn?.classList.remove('hidden');
+    stpBtn?.classList.remove('visible');
+    if (stpBtn) stpBtn.style.display = 'none';
+    if (genBtn) genBtn.style.display = 'flex';
+    if (els.sourceInput) els.sourceInput.disabled = false;
+    if (els.genreSelect) els.genreSelect.disabled = false;
   }
 }
 
@@ -379,7 +535,7 @@ function showWorkspaceWithEmbed(url) {
     // Show YouTube embed
     els.workspaceVideoPlaceholder.style.display = 'none';
     els.workspaceLocalVideo.style.display = 'none';
-    els.workspaceYtIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=0&rel=0&modestbranding=1`;
+    els.workspaceYtIframe.src = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=0&rel=0&modestbranding=1`;
     els.workspaceYtIframe.style.display = 'block';
   }
 }
@@ -411,61 +567,113 @@ async function fetchVideoInfo(url) {
     els.videoDuration.textContent = formatDuration(info.duration || 0);
     els.videoViews.textContent = info.viewCount ? `${formatNumber(info.viewCount)} views` : '';
     els.videoInfoCard.classList.add('visible');
+
+    if (info.sourceResolution) {
+      currentSourceMeta = info.sourceResolution;
+      checkQualityMismatch();
+    }
   } catch (e) {
     // Silently fail — video info is optional
   }
 }
 
-els.videoInfoClose.addEventListener('click', () => {
-  els.videoInfoCard.classList.remove('visible');
+function checkQualityMismatch() {
+  const infoEl = document.getElementById('source-resolution-info');
+  const textEl = document.getElementById('source-res-text');
+  if (!infoEl || !textEl || !currentSourceMeta) return;
+
+  const maxHeight = currentSourceMeta.maxHeight || 1080;
+  infoEl.style.display = 'flex';
+
+  if (videoQuality === '4k' && maxHeight < 2160) {
+    infoEl.className = 'source-res-pill has-warning';
+    textEl.textContent = `⚠️ Source native max is ${currentSourceMeta.maxResolution}. Will download in native resolution.`;
+  } else if (videoQuality === '1080p' && maxHeight < 1080) {
+    infoEl.className = 'source-res-pill has-warning';
+    textEl.textContent = `⚠️ Source native max is ${currentSourceMeta.maxResolution}. Will download in native resolution without upscaling.`;
+  } else {
+    infoEl.className = 'source-res-pill';
+    textEl.textContent = `📥 Source detected: ${currentSourceMeta.maxResolution} @ ${currentSourceMeta.nativeFps}fps`;
+  }
+}
+
+els.videoInfoClose?.addEventListener('click', () => {
+  els.videoInfoCard?.classList.remove('visible');
 });
 
 // ─── Form Submit (Generate) ──────────────────
-els.generateBtn.addEventListener('click', async (e) => {
+const generateBtnTarget = els.generateBtn || document.getElementById('generate-btn') || document.getElementById('process-btn');
+generateBtnTarget?.addEventListener('click', async (e) => {
   e.preventDefault();
+  
+  // ✅ NEW: Check if pipeline already running
+  if (pipelineRunning) {
+    showToast('Pipeline already running. Click Stop first.', 'warning');
+    return;
+  }
+  
   const source = els.sourceInput.value.trim();
   const genre = els.genreSelect.value;
 
   if (!source) return;
 
-  // Collect advanced options
-  const description = els.advDescription.value.trim();
+  // Collect timestamps
   const timestamps = getTimestamps();
-  
+
+  // ── FIX: #ts-only-toggle or radio button determines clipMode ──
+  const tsOnlyToggle = document.getElementById('ts-only-toggle');
   let clipMode = document.querySelector('input[name="clip-mode"]:checked')?.value || 'add';
-  if (timestamps.length > 0 && !description) {
+  if (tsOnlyToggle && tsOnlyToggle.checked) {
     clipMode = 'only';
-    const onlyRadio = document.querySelector('input[name="clip-mode"][value="only"]');
-    if (onlyRadio) onlyRadio.checked = true;
   }
 
+  // Collect pre-generate ratio and zoom
+  const defaultRatio = preGenRatio;
+  const defaultZoom = preGenZoom;
+
   // Reset UI
+  hideErrorPanel();
   setProcessingState(true);
   resetSteps();
   els.terminal.innerHTML = '';
   els.reviewSection.classList.remove('visible');
+  document.getElementById('caption-studio-section')?.classList.remove('visible');
   els.resultsSection.classList.remove('visible');
-  els.publishSection.classList.remove('visible');
-  els.pipelineSection.classList.add('visible');
+  els.publishSection?.classList.remove('visible');
+  els.publishSection?.removeAttribute('data-enabled');
+  
+  // ✅ Disable publish button at start
+  const btnPublish = document.getElementById('btn-publish');
+  if (btnPublish) {
+    btnPublish.disabled = true;
+  }
+  
+  els.pipelineSection?.classList.add('visible');
   selectedClips.clear();
   allClips = [];
   renderedFiles = [];
 
+  pipelineRunning = true;
   startTimer();
 
   try {
     const res = await fetch('/api/process', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, genre, description, timestamps, clipMode }),
+      body: JSON.stringify({ source, genre, timestamps, clipMode, clipCount, defaultRatio, defaultZoom, videoQuality, exportQuality, sessionId: currentSessionId }),
     });
 
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || 'Failed to start pipeline');
+      if (data.error === 'MISSING_API_KEY') {
+        showGlobalAlert(data.message);
+        throw new Error(data.message);
+      }
+      throw new Error(data.message || data.error || 'Failed to start pipeline');
     }
   } catch (err) {
     appendLog(`Failed to start: ${err.message}`, 'error');
+    pipelineRunning = false;
     setProcessingState(false);
     stopTimer();
     showToast(err.message, 'error');
@@ -478,12 +686,83 @@ els.form.addEventListener('submit', (e) => {
   els.generateBtn.click();
 });
 
-// ─── Stop Pipeline ───────────────────────────
-els.stopBtn.addEventListener('click', async () => {
+// ─── Stop Pipeline & Confirmation Modal ───────
+function openStopModal() {
+  const modal = document.getElementById('stop-confirm-modal');
+  if (modal) {
+    modal.classList.add('visible');
+  } else if (confirm('Do you actually want to stop generating clips?')) {
+    executeStopPipeline();
+  }
+}
+
+function closeStopModal() {
+  const modal = document.getElementById('stop-confirm-modal');
+  modal?.classList.remove('visible');
+}
+
+async function executeStopPipeline() {
+  closeStopModal();
   try {
-    await fetch('/api/stop', { method: 'POST' });
-  } catch (e) {
-    appendLog('Failed to stop pipeline', 'error');
+    const res = await fetch('/api/pipeline/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: currentSessionId }),
+    });
+    
+    if (!res.ok) throw new Error('Stop failed');
+    
+    appendLog('🛑 Pipeline stopped immediately by user', 'warning');
+    pipelineRunning = false;
+    setProcessingState(false);
+    stopTimer();
+    showToast('Pipeline cancelled', 'info');
+    
+  } catch (err) {
+    appendLog(`Stop failed: ${err.message}`, 'error');
+    showToast(`Stop failed: ${err.message}`, 'error');
+  }
+}
+
+// Clicking the Stop button triggers the confirmation popup
+const stopBtnTarget = els.stopBtn || document.getElementById('stop-btn');
+stopBtnTarget?.addEventListener('click', (e) => {
+  e.preventDefault();
+  openStopModal();
+});
+
+// Confirmation popup buttons
+const btnStopCancel = document.getElementById('btn-stop-cancel');
+const btnStopConfirm = document.getElementById('btn-stop-confirm');
+const stopModalClose = document.getElementById('stop-modal-close');
+const stopConfirmModal = document.getElementById('stop-confirm-modal');
+
+btnStopCancel?.addEventListener('click', (e) => {
+  e.preventDefault();
+  closeStopModal(); // Cancel -> Continue generating
+});
+
+stopModalClose?.addEventListener('click', (e) => {
+  e.preventDefault();
+  closeStopModal(); // Cancel -> Continue generating
+});
+
+btnStopConfirm?.addEventListener('click', (e) => {
+  e.preventDefault();
+  executeStopPipeline(); // Yes -> Stop immediately
+});
+
+// Close when clicking modal backdrop overlay (cancels stopping)
+stopConfirmModal?.addEventListener('click', (e) => {
+  if (e.target === stopConfirmModal) {
+    closeStopModal();
+  }
+});
+
+// Escape key dismisses the confirmation modal (cancels stopping)
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && stopConfirmModal?.classList.contains('visible')) {
+    closeStopModal();
   }
 });
 
@@ -501,6 +780,12 @@ function showReviewSection(clips) {
   // Auto-select all clips
   clips.forEach((_, i) => selectedClips.add(i));
 
+  // Assign pre-gen ratio and zoom to each clip
+  clips.forEach((clip, i) => {
+    clip.aspectRatio = clip.aspectRatio || preGenRatio;
+    clip.zoom = clip.zoom || preGenZoom;
+  });
+
   clips.forEach((clip, i) => {
     const card = document.createElement('div');
     card.className = 'clip-card selected';
@@ -515,7 +800,8 @@ function showReviewSection(clips) {
           ${clip.source === 'ai' ? '<span class="badge badge-source">🤖 AI</span>' : ''}
         </div>
         <div style="display:flex;gap:8px;align-items:center;">
-          <button class="btn-edit-clip" data-index="${i}">✏️ Edit</button>
+          <button type="button" class="btn-preview-studio" data-index="${i}" title="Preview and style captions side-by-side">🎨 Style Captions</button>
+          <button type="button" class="btn-edit-clip" data-index="${i}">✏️ Edit</button>
           <div class="clip-check">
             <svg class="clip-check-icon" width="12" height="12" viewBox="0 0 12 12" fill="none">
               <path d="M2.5 6L5 8.5L9.5 3.5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -531,7 +817,7 @@ function showReviewSection(clips) {
     `;
 
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.btn-edit-clip')) return;
+      if (e.target.closest('.btn-edit-clip') || e.target.closest('.btn-preview-studio')) return;
       toggleClipSelection(card, i);
     });
     
@@ -540,8 +826,27 @@ function showReviewSection(clips) {
       openEditor(i);
     });
 
+    card.querySelector('.btn-preview-studio').addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectStudioClip(i);
+      const studioSec = document.getElementById('caption-studio-section');
+      if (studioSec) {
+        studioSec.classList.add('visible');
+        studioSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+
     els.reviewGrid.appendChild(card);
   });
+
+  // Reveal Caption Studio and initialize clip options
+  const studioSec = document.getElementById('caption-studio-section');
+  if (studioSec) {
+    studioSec.classList.add('visible');
+  }
+  if (typeof initStudioClipsList === 'function') {
+    initStudioClipsList(clips);
+  }
 
   updateSelectedCount();
   els.reviewSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -594,7 +899,13 @@ els.renderSelectedBtn.addEventListener('click', async () => {
       const res = await fetch('/api/render', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selectedIndices: selectedIndicesArr, selectedClipsData, customOutputDir }),
+        body: JSON.stringify({ 
+          selectedIndices: selectedIndicesArr, 
+          selectedClipsData, 
+          customOutputDir,
+          captionStyle: currentCaptionPreset || 'bold',
+          exportQuality: exportQuality || 'balanced'
+        }),
       });
 
     const data = await res.json();
@@ -609,19 +920,36 @@ els.renderSelectedBtn.addEventListener('click', async () => {
 // ─── Results Section ─────────────────────────
 function showResultsSection(files) {
   els.resultsSection.classList.add('visible');
-  els.publishSection.classList.add('visible');
+  els.publishSection?.classList.add('visible');
+  els.publishSection?.setAttribute('data-enabled', 'true');
+  
+  // ✅ Enable publish button after render
+  const btnPublish = document.getElementById('btn-publish');
+  if (btnPublish) {
+    btnPublish.disabled = false;
+  }
+  
   els.resultsList.innerHTML = '';
 
   if (files.length === 0) {
-    const selected = Array.from(selectedClips).map(i => allClips[i]).filter(Boolean);
-    selected.forEach((clip, i) => {
-      els.resultsList.appendChild(createResultCard(clip, null, i));
+    const selectedIndicesArray = Array.from(selectedClips);
+    selectedIndicesArray.forEach((actualClipIndex, loopIndex) => {
+      const clip = allClips[actualClipIndex] || {};
+      els.resultsList.appendChild(createResultCard(clip, null, actualClipIndex));
     });
   } else {
-    const selected = Array.from(selectedClips).map(i => allClips[i]).filter(Boolean);
-    files.forEach((fileUrl, i) => {
-      const clip = selected[i] || allClips[i] || {};
-      els.resultsList.appendChild(createResultCard(clip, fileUrl, i));
+    const selectedIndicesArray = Array.from(selectedClips);
+    files.forEach((fileData, renderIndex) => {
+      // Map loop index to actual clip index
+      const actualClipIndex = selectedIndicesArray[renderIndex];
+      const clip = allClips[actualClipIndex] || {};
+      
+      // Handle both old string format and new object format
+      const videoUrl = typeof fileData === 'string' ? fileData : fileData?.url;
+      const storageType = typeof fileData === 'string' ? 'local' : (fileData?.type || 'local');
+      
+      // Pass actual index, not loop counter
+      els.resultsList.appendChild(createResultCard(clip, videoUrl, actualClipIndex, storageType));
     });
   }
 
@@ -638,7 +966,7 @@ function sanitizeFilename(name) {
     .slice(0, 80) || 'clip';
 }
 
-function createResultCard(clip, videoUrl, index) {
+function createResultCard(clip, videoUrl, index, storageType = 'local') {
   const card = document.createElement('div');
   card.className = 'result-card';
   card.setAttribute('data-result-index', index);
@@ -656,6 +984,11 @@ function createResultCard(clip, videoUrl, index) {
         </div>
        </div>`;
 
+  // ✅ NEW: Show storage type badge
+  const storageBadge = storageType === 'cloud' 
+    ? '<span class="badge badge-cloud">☁️ Cloud</span>'
+    : '<span class="badge badge-local">💾 Local</span>';
+
   card.innerHTML = `
     <div class="result-video-wrap">
       ${videoHtml}
@@ -664,6 +997,7 @@ function createResultCard(clip, videoUrl, index) {
       <div class="result-social-header">
         <div class="result-title">${escapeHtml(clipTitle)}</div>
         <div class="result-badges">
+          ${storageBadge}
           <span class="badge badge-score">★ ${clip.score || 0}</span>
           <span class="badge badge-duration">${clip.duration || 0}s</span>
           ${clip.language && clip.language !== 'unknown' ? `<span class="badge badge-lang">${clip.language}</span>` : ''}
@@ -707,13 +1041,13 @@ function createResultCard(clip, videoUrl, index) {
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2v8m0 0l2.5-2.5M8 10L5.5 7.5M3 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
               Download
             </a>
-            <button class="btn-upload-yt" data-clip-index="${index}" title="Upload to YouTube">
+            <button class="btn-publish-direct-yt" data-clip-index="${index}" title="Upload to YouTube Shorts">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M22.54 6.42a2.78 2.78 0 00-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 00-1.94 2A29.94 29.94 0 001 12a29.94 29.94 0 00.46 5.58 2.78 2.78 0 001.94 2c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 001.94-2A29.94 29.94 0 0023 12a29.94 29.94 0 00-.46-5.58z" stroke="currentColor" stroke-width="1.5"/><path d="M9.75 15.02l5.75-3.27-5.75-3.27v6.54z" fill="currentColor"/></svg>
-              YT
+              <span>YouTube</span>
             </button>
-            <button class="btn-upload-ig" data-clip-index="${index}" title="Upload to Instagram">
+            <button class="btn-publish-direct-ig" data-clip-index="${index}" title="Upload to Instagram Reels">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="5" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.5"/><circle cx="17.5" cy="6.5" r="1.5" fill="currentColor"/></svg>
-              IG
+              <span>Instagram</span>
             </button>`
           : `<span style="font-size:0.78rem;color:var(--text-muted)">Install FFmpeg + yt-dlp for real clips</span>`
         }
@@ -743,8 +1077,8 @@ function createResultCard(clip, videoUrl, index) {
     });
   }
 
-  // Attach per-clip upload handlers
-  const ytBtn = card.querySelector('.btn-upload-yt');
+  // Attach direct social upload handlers
+  const ytBtn = card.querySelector('.btn-publish-direct-yt');
   if (ytBtn) {
     ytBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -753,7 +1087,7 @@ function createResultCard(clip, videoUrl, index) {
     });
   }
 
-  const igBtn = card.querySelector('.btn-upload-ig');
+  const igBtn = card.querySelector('.btn-publish-direct-ig');
   if (igBtn) {
     igBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -768,7 +1102,8 @@ function createResultCard(clip, videoUrl, index) {
 // ─── Per-Clip Publish ────────────────────────
 async function publishSingleClip(index, platform) {
   if (!platformConnections[platform]) {
-    showToast(`${platform} not connected. Connect it first in the Publish section.`, 'warning');
+    showToast(`Redirecting to ${platform === 'youtube' ? 'Google / YouTube' : 'Instagram / Meta'} login...`, 'info');
+    window.open(`/api/connect/${platform}`, '_blank', 'width=620,height=720');
     return;
   }
 
@@ -783,14 +1118,31 @@ async function publishSingleClip(index, platform) {
   showToast(`Uploading to ${platform}...`, 'info');
 
   try {
+    // Build workflow metadata from the clip itself with proper fallbacks
+    const workflow = {
+      youtube: {
+        title: clip.title || `Clip ${index + 1}`,
+        description: clip.description || clip.caption || '',
+        tags: clip.hashtags || '',
+        visibility: 'public',
+        audience: 'general',
+      },
+      instagram: {
+        caption: clip.caption || clip.title || `Clip ${index + 1}`,
+        hashtags: clip.hashtags || '',
+      }
+    };
+
     const res = await fetch('/api/publish-clip', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clip, fileUrl, platform, workflow: {} }),
+      body: JSON.stringify({ clip, fileUrl, platform, workflow }),
     });
     const data = await res.json();
     if (!data.success) {
       showToast(data.message || `Failed to upload to ${platform}`, 'error');
+    } else {
+      showToast(`Uploaded to ${platform}!`, 'success');
     }
   } catch (err) {
     showToast(`Upload failed: ${err.message}`, 'error');
@@ -823,10 +1175,11 @@ els.newVideoBtn.addEventListener('click', () => {
   els.sourceInput.value = '';
   els.videoInfoCard.classList.remove('visible');
   els.workspaceSection.classList.remove('visible');
-  els.pipelineSection.classList.remove('visible');
+  els.pipelineSection?.classList.remove('visible');
   els.reviewSection.classList.remove('visible');
+  document.getElementById('caption-studio-section')?.classList.remove('visible');
   els.resultsSection.classList.remove('visible');
-  els.publishSection.classList.remove('visible');
+  els.publishSection?.classList.remove('visible');
   els.terminal.innerHTML = '<div class="terminal-line terminal-muted">Ready for a new video...</div>';
   // Reset workspace video
   els.workspaceYtIframe.style.display = 'none';
@@ -846,12 +1199,14 @@ els.newVideoBtn.addEventListener('click', () => {
 
 // ─── System Status ───────────────────────────
 async function checkStatus() {
+  if (!els.statusGrid) return;
   els.statusGrid.innerHTML = '<div class="status-card loading"><span class="status-card-label">Checking dependencies...</span></div>';
 
   try {
     const res = await fetch('/api/status');
     const data = await res.json();
 
+    if (!els.statusGrid) return;
     els.statusGrid.innerHTML = '';
     let allOk = true;
 
@@ -877,17 +1232,21 @@ async function checkStatus() {
       els.statusGrid.appendChild(card);
     });
 
-    els.statusHint.textContent = allOk
-      ? '✅ All dependencies installed — full pipeline ready!'
-      : '⚠️ Some dependencies missing — demo mode will be used. Install missing tools for real processing.';
+    if (els.statusHint) {
+      els.statusHint.textContent = allOk
+        ? '✅ All dependencies installed — full pipeline ready!'
+        : '⚠️ Some dependencies missing — demo mode will be used. Install missing tools for real processing.';
+    }
 
   } catch (err) {
-    els.statusGrid.innerHTML = '<div class="status-card loading" style="color:var(--accent-red)"><span class="status-card-label">Could not reach server</span></div>';
+    if (els.statusGrid) {
+      els.statusGrid.innerHTML = '<div class="status-card loading" style="color:var(--accent-red)"><span class="status-card-label">Could not reach server</span></div>';
+    }
   }
 }
 
-els.recheckBtn.addEventListener('click', checkStatus);
-checkStatus();
+els.recheckBtn?.addEventListener('click', checkStatus);
+if (els.statusGrid) checkStatus();
 
 // ─── Utility Functions ───────────────────────
 function escapeHtml(str) {
@@ -960,22 +1319,203 @@ function showToast(message, type = 'info') {
 }
 
 // ─── Logo click → reset ──────────────────────
-$('#logo').addEventListener('click', () => {
-  els.newVideoBtn.click();
+$('#logo')?.addEventListener('click', () => {
+  els.newVideoBtn?.click();
 });
 
-// --- Editor Modal Logic ----------------------
+// ─── Error Panel ─────────────────────────────
+const ERROR_SOLUTIONS = {
+  OLLAMA_CONNECTION: {
+    title: '🔌 Ollama Not Running',
+    fix: 'Ollama is not running or cannot be reached at localhost:11434.',
+    steps: [
+      'Open a terminal and run: <code>ollama serve</code>',
+      'Make sure the model is downloaded: <code>ollama pull llama3.2:3b</code>',
+      'Alternatively, add a <code>GROQ_API_KEY</code> to your .env for cloud-based transcription.',
+    ],
+    actions: [{ label: 'Re-check Status', action: () => checkStatus() }],
+  },
+  OLLAMA_TIMEOUT: {
+    title: '⏱️ Ollama Timed Out',
+    fix: 'Ollama took too long to respond. This usually means your model is too large for your hardware.',
+    steps: [
+      'Try a smaller model: change <code>MODEL=llama3.2:3b</code> in your .env file',
+      'Make sure no other heavy apps are running',
+      'Check if Ollama is using your GPU: run <code>ollama ps</code> in a terminal',
+    ],
+    actions: [{ label: 'Re-check Status', action: () => checkStatus() }],
+  },
+  YTDLP_FAILED: {
+    title: '📥 Download Failed',
+    fix: 'yt-dlp could not download the video. YouTube may be blocking the request.',
+    steps: [
+      'Make sure you are logged into YouTube in Chrome, then try again (yt-dlp will use your cookies)',
+      'Update yt-dlp: run <code>yt-dlp -U</code> in a terminal',
+      'Try a different YouTube URL or check if the video is private/age-restricted',
+    ],
+    actions: [],
+  },
+  FFMPEG_FAILED: {
+    title: '🎬 FFmpeg Error',
+    fix: 'FFmpeg failed during audio extraction or video trimming.',
+    steps: [
+      'Verify FFmpeg is installed: run <code>ffmpeg -version</code> in a terminal',
+      'Make sure the video file is not corrupted',
+      'If using a local file, try re-downloading the video',
+    ],
+    actions: [{ label: 'Re-check Status', action: () => checkStatus() }],
+  },
+  TRANSCRIPTION_FAILED: {
+    title: '🎤 Transcription Failed',
+    fix: 'Whisper could not transcribe the audio.',
+    steps: [
+      'Add a <code>GROQ_API_KEY</code> to your .env for fast cloud transcription (free at console.groq.com)',
+      'Or install local Whisper: <code>pip install faster-whisper</code>',
+      'Check that the video has clear speech (not music-only)',
+    ],
+    actions: [],
+  },
+  NO_MANUAL_CLIPS_FOUND: {
+    title: '🔍 No Matching Clips',
+    fix: 'No clips were found matching your description or timestamps.',
+    steps: [
+      'Check that your timestamps are within the video duration',
+      'Try different search words in the description field',
+      'Switch to "Add to AI clips" mode to also get AI-generated clips',
+    ],
+    actions: [],
+  },
+  YOUTUBE_QUOTA: {
+    title: '📊 YouTube Daily Upload Limit Reached',
+    fix: 'You have reached the YouTube daily upload quota (6 videos per day).',
+    steps: [
+      'The quota resets at midnight Pacific Time (PT)',
+      'You can still download clips locally and upload manually',
+      'Consider using the Unlisted visibility option to test uploads',
+    ],
+    actions: [],
+  },
+  INSTAGRAM_API: {
+    title: '📱 Instagram Upload Failed',
+    fix: 'Instagram API rejected the upload.',
+    steps: [
+      'Make sure your Instagram account is a Business or Creator account',
+      'Your account must be linked to a Facebook Page',
+      'Instagram requires videos to be under 90 seconds for Reels',
+      'If running locally, Instagram cannot access localhost — you need a public URL (ngrok)',
+    ],
+    actions: [],
+  },
+  UNKNOWN: {
+    title: '❌ Pipeline Error',
+    fix: 'An unexpected error occurred during processing.',
+    steps: [
+      'Check the terminal log above for detailed error messages',
+      'Re-check that all dependencies (FFmpeg, yt-dlp, Ollama) are installed and running',
+      'Try running with a shorter test video first',
+    ],
+    actions: [{ label: 'Re-check Status', action: () => checkStatus() }],
+  },
+};
+
+function showErrorPanel(errorCode, message) {
+  if (!els.errorPanel) return;
+
+  const solution = ERROR_SOLUTIONS[errorCode] || ERROR_SOLUTIONS['UNKNOWN'];
+
+  els.errorPanelTitle.textContent = solution.title;
+  els.errorPanelMsg.innerHTML = `<strong>Error:</strong> ${escapeHtml(message)}`;
+  els.errorPanelFix.innerHTML = `
+    <p>${escapeHtml(solution.fix)}</p>
+    <ul class="error-fix-list">
+      ${solution.steps.map(s => `<li>${s}</li>`).join('')}
+    </ul>
+  `;
+
+  // Action buttons
+  els.errorPanelActions.innerHTML = '';
+  solution.actions.forEach(a => {
+    const btn = document.createElement('button');
+    btn.className = 'btn-secondary btn-sm';
+    btn.textContent = a.label;
+    btn.addEventListener('click', a.action);
+    els.errorPanelActions.appendChild(btn);
+  });
+
+  els.errorPanel.style.display = 'block';
+  els.errorPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function hideErrorPanel() {
+  if (els.errorPanel) els.errorPanel.style.display = 'none';
+}
+
+// Close error panel button
+els.errorPanelClose?.addEventListener('click', hideErrorPanel);
+
+// ─── Trim Controls ───────────────────────────
+els.trimClearBtn?.addEventListener('click', () => {
+  if (els.trimStart) els.trimStart.value = '';
+  if (els.trimEnd) els.trimEnd.value = '';
+  if (els.trimPreview) els.trimPreview.textContent = '';
+});
+
+// Show trim preview when values change
+function updateTrimPreview() {
+  if (!els.trimPreview) return;
+  const start = parseTimeStr(els.trimStart?.value);
+  const end = parseTimeStr(els.trimEnd?.value);
+  if (!isNaN(start) && !isNaN(end) && end > start) {
+    const dur = Math.round(end - start);
+    els.trimPreview.innerHTML = `✂️ Will trim to: <strong>${formatDuration(start)}</strong> → <strong>${formatDuration(end)}</strong> (${formatDuration(dur)} clip)`;
+  } else if (!isNaN(start) && isNaN(end)) {
+    els.trimPreview.innerHTML = `✂️ Will start from: <strong>${formatDuration(start)}</strong>`;
+  } else {
+    els.trimPreview.textContent = '';
+  }
+}
+
+els.trimStart?.addEventListener('blur', updateTrimPreview);
+els.trimEnd?.addEventListener('blur', updateTrimPreview);
+
+// ─── Bind static first timestamp row ─────────
+// The first row is in the HTML, not dynamically added, so bind it here
+(function() {
+  const firstRow = els.timestampRows?.querySelector('.timestamp-row');
+  if (firstRow) bindTimestampRow(firstRow);
+})();
+
+
+
+// ─── Global Alert Banner Helpers ───────────────
+function showGlobalAlert(msg) {
+  const banner = document.getElementById('global-alert-banner');
+  const text = document.getElementById('global-alert-message');
+  if (banner && text) {
+    text.textContent = msg;
+    banner.style.display = 'flex';
+  }
+  showToast(msg, 'error');
+}
+
+function hideGlobalAlert() {
+  const banner = document.getElementById('global-alert-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+// ─── Creative Studio & Editor Modal Logic ─────
 let editingClipIndex = -1;
 let currentClipData = null;
 
 function openEditor(index) {
   editingClipIndex = index;
   currentClipData = allClips[index];
+  if (!currentClipData) return;
   
   const start = currentClipData.editStart ?? currentClipData.start ?? 0;
   const end = currentClipData.editEnd ?? currentClipData.end ?? 0;
   
-  currentClipData.zoom = currentClipData.zoom ?? 1.0;
+  currentClipData.zoom = currentClipData.zoom ?? preGenZoom ?? 1.0;
   currentClipData.panX = currentClipData.panX ?? 0;
   currentClipData.panY = currentClipData.panY ?? 0;
   currentClipData.brightness = currentClipData.brightness ?? 0.0;
@@ -983,8 +1523,29 @@ function openEditor(index) {
   currentClipData.exposure = currentClipData.exposure ?? 0.0;
   currentClipData.saturation = currentClipData.saturation ?? 1.0;
   currentClipData.sharpen = currentClipData.sharpen ?? 0.0;
-  currentClipData.aspectRatio = currentClipData.aspectRatio ?? '1:1';
-  currentClipData.captionsEnabled = currentClipData.captionsEnabled ?? false;
+  currentClipData.aspectRatio = currentClipData.aspectRatio ?? '9:16';
+  
+  // Custom caption settings for this clip
+  const custom = currentClipData.custom = currentClipData.custom || {};
+  custom.captionPreset = custom.captionPreset || 'bold';
+  custom.captionsEnabled = custom.captionsEnabled ?? true;
+  custom.fontFamily = custom.fontFamily || 'Outfit';
+  custom.fontSize = custom.fontSize || 52;
+  custom.highlightColor = custom.highlightColor || '#fee440';
+  custom.textColor = custom.textColor || '#ffffff';
+  custom.textCase = custom.textCase || 'uppercase';
+  custom.marginV = custom.marginV ?? 420;
+
+  // Sync Vertical Margin & Safe Area indicator
+  if (els.editorMarginV) els.editorMarginV.value = custom.marginV;
+  if (els.editorMarginVVal) els.editorMarginVVal.textContent = `${custom.marginV}px`;
+  updateSafeZoneStatus(custom.marginV);
+
+  // Sync Preset Badges
+  updatePresetBadgeA(custom.captionPreset);
+  if (els.editorComparePresetSelect) {
+    els.editorComparePresetSelect.value = custom.captionPreset === 'bold' ? 'karaoke' : 'bold';
+  }
 
   els.editorStart.min = 0;
   els.editorStart.max = currentClipData.end + 10;
@@ -1000,15 +1561,41 @@ function openEditor(index) {
   els.editorSaturation.value = currentClipData.saturation;
   els.editorSharpen.value = currentClipData.sharpen;
 
-  // Set captions toggle
-  els.editorCaptionsToggle.checked = currentClipData.captionsEnabled;
-  els.editorValCaptions.textContent = currentClipData.captionsEnabled ? 'ON' : 'OFF';
+  // Sync Captions Toggle
+  if (els.editorCaptionsToggle) {
+    els.editorCaptionsToggle.checked = custom.captionsEnabled;
+    if (els.editorValCaptions) els.editorValCaptions.textContent = custom.captionsEnabled ? 'ON' : 'OFF';
+  }
 
-  // Set aspect ratio
+  // Sync Preset Chips
+  document.querySelectorAll('#editor-presets-grid .preset-chip').forEach(chip => {
+    chip.classList.toggle('active', chip.dataset.preset === custom.captionPreset);
+  });
+
+  // Sync Typography Controls
+  const fontSelect = document.getElementById('editor-font-family');
+  if (fontSelect) fontSelect.value = custom.fontFamily;
+
+  const fontSizeSlider = document.getElementById('editor-font-size');
+  const fontSizeVal = document.getElementById('editor-font-size-val');
+  if (fontSizeSlider) fontSizeSlider.value = custom.fontSize;
+  if (fontSizeVal) fontSizeVal.textContent = `${custom.fontSize}px`;
+
+  const colorHighlight = document.getElementById('editor-color-highlight');
+  if (colorHighlight) colorHighlight.value = custom.highlightColor;
+
+  const colorText = document.getElementById('editor-color-text');
+  if (colorText) colorText.value = custom.textColor;
+
+  document.querySelectorAll('#editor-case-btns .btn-case').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.case === custom.textCase);
+  });
+
+  // Set aspect ratio (default to 9:16)
   currentEditorRatio = currentClipData.aspectRatio;
   setEditorRatio(currentEditorRatio);
 
-  // Enable audio
+  // Enable audio & stream video
   els.editorVideo.src = '/api/raw_video';
   els.editorVideo.volume = parseFloat(els.volumeSlider.value);
   els.editorVideo.muted = false;
@@ -1016,6 +1603,7 @@ function openEditor(index) {
   els.editorVideo.addEventListener('loadedmetadata', () => {
     els.editorVideo.currentTime = start;
     updateEditorLabels();
+    renderEditorCaption(start);
     els.editorVideo.play().catch(err => console.warn('Autoplay prevented:', err));
   }, { once: true });
 
@@ -1026,10 +1614,488 @@ function closeEditor() {
   els.editorModal.classList.remove("visible");
   els.editorVideo.pause();
   els.editorVideo.removeAttribute('src');
+  if (els.editorVideoB) {
+    els.editorVideoB.pause();
+    els.editorVideoB.removeAttribute('src');
+  }
   editingClipIndex = -1;
   currentClipData = null;
   editorReRenderIndex = -1;
 }
+
+// ─── Preset Display Helpers & Shared Style Models ──
+function getPresetDisplayName(presetId) {
+  const map = {
+    minimal: 'Clean Minimal',
+    cinematic: 'Cinematic',
+    bold: 'Bold Highlight',
+    karaoke: 'Karaoke Word',
+    pop: 'Animated Pop',
+    podcast: 'Podcast Sub',
+    educational: 'Educational',
+    gaming: 'Gaming Neon',
+  };
+  return map[presetId] || 'Bold Highlight';
+}
+
+function updatePresetBadgeA(presetId) {
+  if (els.stageBadgeAText) {
+    els.stageBadgeAText.textContent = `Style A: ${getPresetDisplayName(presetId)}`;
+  }
+}
+
+function updateSafeZoneStatus(marginV) {
+  if (!els.editorSafeZoneStatus) return;
+  if (marginV >= 350) {
+    els.editorSafeZoneStatus.className = 'safe-zone-status safe';
+    els.editorSafeZoneStatus.innerHTML = '<span>✅ Platform Safe: Avoids TikTok & Reels bottom engagement UI</span>';
+  } else {
+    els.editorSafeZoneStatus.className = 'safe-zone-status warn';
+    els.editorSafeZoneStatus.innerHTML = '<span>⚠️ Caution: May be obscured by bottom titles and action buttons on mobile</span>';
+  }
+}
+
+function positionCaptionOverlay(overlay, marginV, presetId) {
+  if (!overlay) return;
+  if (presetId === 'pop') {
+    overlay.style.bottom = '50%';
+    overlay.style.transform = 'translateY(50%)';
+  } else {
+    const bottomPercent = Math.min(65, Math.max(10, ((marginV || 420) / 1920) * 100));
+    overlay.style.bottom = `${bottomPercent.toFixed(1)}%`;
+    overlay.style.transform = 'none';
+  }
+}
+
+function getCaptionWordHtml(windowWords, currentTime, presetId, custom, textCase) {
+  return windowWords.map(w => {
+    const isActive = currentTime >= w.start && currentTime <= w.end;
+    let wordText = w.word;
+    if (textCase === 'uppercase') wordText = wordText.toUpperCase();
+    else if (textCase === 'capitalize') wordText = wordText.charAt(0).toUpperCase() + wordText.slice(1);
+
+    const baseFont = custom.fontFamily || (presetId === 'cinematic' ? 'Georgia' : (presetId === 'gaming' ? 'Impact' : 'Outfit'));
+    const fontSizePx = Math.round((custom.fontSize || 52) * 0.38);
+    const textColor = custom.textColor || '#ffffff';
+    const highlightColor = custom.highlightColor || (presetId === 'karaoke' ? '#00FF66' : (presetId === 'cinematic' ? '#F0F0F0' : '#fee440'));
+
+    let style = `font-family: '${baseFont}', sans-serif; font-size: ${fontSizePx}px;`;
+
+    switch (presetId) {
+      case 'minimal':
+        style += `font-weight: 700; color: ${textColor}; background: rgba(0,0,0,0.65); padding: 4px 10px; border-radius: 6px;`;
+        break;
+      case 'cinematic':
+        style += `font-family: 'Georgia', serif; font-style: italic; font-weight: 400; letter-spacing: 0.08em; text-shadow: 0 4px 10px rgba(0,0,0,0.9); color: ${isActive ? highlightColor : '#D0D0D0'};`;
+        break;
+      case 'karaoke':
+        style += `font-weight: 900;`;
+        if (isActive) {
+          style += `color: ${highlightColor}; text-shadow: 0 0 10px ${highlightColor}, -2px -2px 0 #000, 2px 2px 0 #000; transform: scale(1.1); display: inline-block;`;
+        } else {
+          style += `color: ${textColor}; text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, 0 2px 4px rgba(0,0,0,0.8);`;
+        }
+        break;
+      case 'pop':
+        style += `font-weight: 900; text-transform: uppercase;`;
+        if (isActive) {
+          style += `color: ${highlightColor}; transform: scale(1.28); display: inline-block; text-shadow: -3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000, 3px 3px 0 #000, 0 6px 14px rgba(0,0,0,0.95);`;
+        } else {
+          style += `color: ${textColor}; text-shadow: -2px -2px 0 #000, 2px -2px 0 #000;`;
+        }
+        break;
+      case 'podcast':
+        style += `font-weight: 700; background: rgba(0,0,0,0.45); padding: 2px 8px; border-radius: 4px;`;
+        style += isActive ? `color: ${highlightColor}; text-shadow: 0 2px 6px rgba(0,0,0,0.8);` : `color: ${textColor};`;
+        break;
+      case 'educational':
+        style += `font-family: 'Trebuchet MS', 'Segoe UI', sans-serif; font-weight: 700;`;
+        if (isActive) {
+          style += `color: #38bdf8; background: rgba(15,23,42,0.8); padding: 2px 6px; border-radius: 6px; text-shadow: 0 0 8px rgba(56,189,248,0.5);`;
+        } else {
+          style += `color: ${textColor}; text-shadow: -2px -2px 0 #0f172a, 2px 2px 0 #0f172a;`;
+        }
+        break;
+      case 'gaming':
+        style += `font-family: Impact, sans-serif; font-style: italic; font-weight: 900; text-transform: uppercase;`;
+        if (isActive) {
+          style += `color: ${highlightColor}; text-shadow: -3px -3px 0 #000, 3px -3px 0 #000, 0 0 14px #ff4500; transform: scale(1.15); display: inline-block;`;
+        } else {
+          style += `color: #ff4500; text-shadow: -2px -2px 0 #000, 2px -2px 0 #000;`;
+        }
+        break;
+      case 'bold':
+      default:
+        style += `font-weight: 900;`;
+        if (isActive) {
+          style += `color: ${highlightColor}; transform: scale(1.18); display: inline-block; text-shadow: -3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000, 3px 3px 0 #000, 0 4px 8px rgba(0,0,0,0.9);`;
+        } else {
+          style += `color: ${textColor}; text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000;`;
+        }
+        break;
+    }
+    return `<span style="${style}">${escapeHtml(wordText)}</span>`;
+  }).join(' ');
+}
+
+// ─── Real-Time Caption Renderer in Editor Canvas (View A) ──
+function renderEditorCaption(currentTime) {
+  const box = document.getElementById('editor-caption-box');
+  const overlay = document.getElementById('editor-caption-overlay');
+  if (!box || !overlay || !currentClipData) return;
+
+  const custom = currentClipData.custom || {};
+  if (custom.captionsEnabled === false) {
+    overlay.style.display = 'none';
+    return;
+  }
+  overlay.style.display = 'flex';
+
+  const presetId = custom.captionPreset || 'bold';
+  const marginV = custom.marginV ?? 420;
+  positionCaptionOverlay(overlay, marginV, presetId);
+
+  const clipStart = currentClipData.editStart ?? currentClipData.start ?? 0;
+  let words = currentClipData.words;
+  if (!words || words.length === 0) {
+    const textWords = (currentClipData.text || '').trim().split(/\s+/).filter(Boolean);
+    const dur = Math.max(1, (currentClipData.end || 30) - (currentClipData.start || 0));
+    const wordDur = dur / Math.max(1, textWords.length);
+    words = textWords.map((w, i) => ({ word: w, start: clipStart + (i * wordDur), end: clipStart + ((i + 1) * wordDur) }));
+  }
+
+  const activeWordIdx = words.findIndex(w => currentTime >= w.start && currentTime <= w.end);
+  const safeIdx = activeWordIdx >= 0 ? activeWordIdx : words.findIndex(w => w.start > currentTime);
+  const targetIdx = safeIdx === -1 ? words.length - 1 : safeIdx;
+
+  const chunkSize = presetId === 'pop' ? 2 : (presetId === 'gaming' ? 3 : 4);
+  const startWindow = Math.max(0, Math.floor(targetIdx / chunkSize) * chunkSize);
+  const windowWords = words.slice(startWindow, startWindow + chunkSize);
+
+  box.innerHTML = getCaptionWordHtml(windowWords, currentTime, presetId, custom, custom.textCase || 'uppercase');
+}
+
+// ─── Real-Time Caption Renderer in Comparison View (View B) ──
+function renderCompareCaptionB(currentTime) {
+  const box = document.getElementById('editor-caption-box-b');
+  const overlay = document.getElementById('editor-caption-overlay-b');
+  if (!box || !overlay || !currentClipData) return;
+
+  const custom = currentClipData.custom || {};
+  if (custom.captionsEnabled === false) {
+    overlay.style.display = 'none';
+    return;
+  }
+  overlay.style.display = 'flex';
+
+  const presetIdB = els.editorComparePresetSelect?.value || 'karaoke';
+  const marginV = custom.marginV ?? 420;
+  positionCaptionOverlay(overlay, marginV, presetIdB);
+
+  const clipStart = currentClipData.editStart ?? currentClipData.start ?? 0;
+  let words = currentClipData.words;
+  if (!words || words.length === 0) {
+    const textWords = (currentClipData.text || '').trim().split(/\s+/).filter(Boolean);
+    const dur = Math.max(1, (currentClipData.end || 30) - (currentClipData.start || 0));
+    const wordDur = dur / Math.max(1, textWords.length);
+    words = textWords.map((w, i) => ({ word: w, start: clipStart + (i * wordDur), end: clipStart + ((i + 1) * wordDur) }));
+  }
+
+  const activeWordIdx = words.findIndex(w => currentTime >= w.start && currentTime <= w.end);
+  const safeIdx = activeWordIdx >= 0 ? activeWordIdx : words.findIndex(w => w.start > currentTime);
+  const targetIdx = safeIdx === -1 ? words.length - 1 : safeIdx;
+
+  const chunkSize = presetIdB === 'pop' ? 2 : (presetIdB === 'gaming' ? 3 : 4);
+  const startWindow = Math.max(0, Math.floor(targetIdx / chunkSize) * chunkSize);
+  const windowWords = words.slice(startWindow, startWindow + chunkSize);
+
+  box.innerHTML = getCaptionWordHtml(windowWords, currentTime, presetIdB, custom, custom.textCase || 'uppercase');
+}
+
+// Synchronize video playback with caption rendering
+els.editorVideo.addEventListener('timeupdate', () => {
+  const cur = els.editorVideo.currentTime;
+  renderEditorCaption(cur);
+  if (editorViewMode === 'compare') {
+    if (els.editorVideoB && Math.abs(els.editorVideoB.currentTime - cur) > 0.3) {
+      els.editorVideoB.currentTime = cur;
+    }
+    renderCompareCaptionB(cur);
+  }
+});
+
+// Dual video playback sync
+if (els.editorVideo && els.editorVideoB) {
+  els.editorVideo.addEventListener('play', () => {
+    if (editorViewMode === 'compare') els.editorVideoB.play().catch(() => {});
+  });
+  els.editorVideo.addEventListener('pause', () => {
+    if (editorViewMode === 'compare') els.editorVideoB.pause();
+  });
+  els.editorVideo.addEventListener('seeking', () => {
+    if (editorViewMode === 'compare') els.editorVideoB.currentTime = els.editorVideo.currentTime;
+  });
+}
+
+// ─── View Mode Toggle (Single vs Compare Side-by-Side) ──
+let editorViewMode = 'single';
+els.editorViewModeToggle?.querySelectorAll('.view-mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    els.editorViewModeToggle.querySelectorAll('.view-mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    editorViewMode = btn.dataset.mode || 'single';
+
+    const modalContent = document.querySelector('.studio-modal-content');
+    if (editorViewMode === 'compare') {
+      modalContent?.classList.add('compare-active');
+      if (els.stageViewB) els.stageViewB.style.display = 'flex';
+      if (els.editorVideo && els.editorVideoB) {
+        els.editorVideoB.src = els.editorVideo.src;
+        els.editorVideoB.currentTime = els.editorVideo.currentTime;
+        if (!els.editorVideo.paused) els.editorVideoB.play().catch(() => {});
+      }
+      renderCompareCaptionB(els.editorVideo.currentTime);
+    } else {
+      modalContent?.classList.remove('compare-active');
+      if (els.stageViewB) els.stageViewB.style.display = 'none';
+      if (els.editorVideoB) els.editorVideoB.pause();
+    }
+  });
+});
+
+// ─── Compare Preset Dropdown Listener ────────
+els.editorComparePresetSelect?.addEventListener('change', () => {
+  renderCompareCaptionB(els.editorVideo.currentTime);
+});
+
+// ─── Choose Style B Button ───────────────────
+els.btnUseStyleB?.addEventListener('click', () => {
+  const chosenPreset = els.editorComparePresetSelect?.value || 'karaoke';
+  if (currentClipData) {
+    currentClipData.custom = currentClipData.custom || {};
+    currentClipData.custom.captionPreset = chosenPreset;
+
+    document.querySelectorAll('#editor-presets-grid .preset-chip').forEach(c => {
+      c.classList.toggle('active', c.dataset.preset === chosenPreset);
+    });
+
+    updatePresetBadgeA(chosenPreset);
+    renderEditorCaption(els.editorVideo.currentTime);
+    showToast(`Adopted ${getPresetDisplayName(chosenPreset)} as active clip style!`, 'success');
+  }
+});
+
+// ─── Apply to All Clips Button ───────────────
+els.editorApplyAllBtn?.addEventListener('click', () => {
+  if (!currentClipData || !allClips || allClips.length === 0) return;
+  const custom = currentClipData.custom || {};
+  const presetId = custom.captionPreset || 'bold';
+
+  allClips.forEach(clip => {
+    clip.custom = clip.custom || {};
+    clip.custom.captionPreset = presetId;
+    clip.custom.captionsEnabled = els.editorCaptionsToggle.checked;
+    clip.custom.fontFamily = custom.fontFamily;
+    clip.custom.fontSize = custom.fontSize;
+    clip.custom.highlightColor = custom.highlightColor;
+    clip.custom.textColor = custom.textColor;
+    clip.custom.textCase = custom.textCase;
+    clip.custom.marginV = custom.marginV;
+  });
+
+  showToast(`✨ Caption preset '${getPresetDisplayName(presetId)}' applied to all ${allClips.length} clips!`, 'success');
+});
+
+// ─── Vertical Position (Safe Zone) Slider Listener ──
+els.editorMarginV?.addEventListener('input', (e) => {
+  const marginV = parseInt(e.target.value, 10);
+  if (els.editorMarginVVal) els.editorMarginVVal.textContent = `${marginV}px`;
+  updateSafeZoneStatus(marginV);
+
+  if (currentClipData) {
+    currentClipData.custom = currentClipData.custom || {};
+    currentClipData.custom.marginV = marginV;
+    renderEditorCaption(els.editorVideo.currentTime);
+    if (editorViewMode === 'compare') {
+      renderCompareCaptionB(els.editorVideo.currentTime);
+    }
+  }
+});
+
+// ─── Preset Selection in Studio (View A) ─────
+document.querySelectorAll('#editor-presets-grid .preset-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('#editor-presets-grid .preset-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    if (currentClipData) {
+      currentClipData.custom = currentClipData.custom || {};
+      currentClipData.custom.captionPreset = chip.dataset.preset;
+      updatePresetBadgeA(chip.dataset.preset);
+      renderEditorCaption(els.editorVideo.currentTime);
+    }
+  });
+});
+
+// ─── Safe Area Toggle ────────────────────────
+document.getElementById('toggle-editor-safe-zone')?.addEventListener('change', (e) => {
+  els.editorCanvasContainer.classList.toggle('hide-safe-zone', !e.target.checked);
+});
+
+// ─── Typography Inputs Listeners ─────────────
+document.getElementById('editor-font-family')?.addEventListener('change', (e) => {
+  if (currentClipData) {
+    currentClipData.custom = currentClipData.custom || {};
+    currentClipData.custom.fontFamily = e.target.value;
+    renderEditorCaption(els.editorVideo.currentTime);
+  }
+});
+
+document.getElementById('editor-font-size')?.addEventListener('input', (e) => {
+  const val = parseInt(e.target.value, 10);
+  const valEl = document.getElementById('editor-font-size-val');
+  if (valEl) valEl.textContent = `${val}px`;
+  if (currentClipData) {
+    currentClipData.custom = currentClipData.custom || {};
+    currentClipData.custom.fontSize = val;
+    renderEditorCaption(els.editorVideo.currentTime);
+  }
+});
+
+document.getElementById('editor-color-highlight')?.addEventListener('input', (e) => {
+  if (currentClipData) {
+    currentClipData.custom = currentClipData.custom || {};
+    currentClipData.custom.highlightColor = e.target.value;
+    renderEditorCaption(els.editorVideo.currentTime);
+  }
+});
+
+document.getElementById('editor-color-text')?.addEventListener('input', (e) => {
+  if (currentClipData) {
+    currentClipData.custom = currentClipData.custom || {};
+    currentClipData.custom.textColor = e.target.value;
+    renderEditorCaption(els.editorVideo.currentTime);
+  }
+});
+
+document.querySelectorAll('#editor-case-btns .btn-case').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#editor-case-btns .btn-case').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    if (currentClipData) {
+      currentClipData.custom = currentClipData.custom || {};
+      currentClipData.custom.textCase = btn.dataset.case;
+      renderEditorCaption(els.editorVideo.currentTime);
+    }
+  });
+});
+
+// ─── Subtitle Exports (.SRT & .ASS) ───────────
+document.getElementById('btn-editor-export-srt')?.addEventListener('click', () => {
+  if (!currentClipData) return;
+  const clipStart = currentClipData.editStart ?? currentClipData.start ?? 0;
+  let words = currentClipData.words;
+  if (!words || words.length === 0) {
+    const textWords = (currentClipData.text || '').trim().split(/\s+/).filter(Boolean);
+    const dur = Math.max(1, (currentClipData.end || 30) - (currentClipData.start || 0));
+    const wordDur = dur / Math.max(1, textWords.length);
+    words = textWords.map((w, i) => ({ word: w, start: i * wordDur, end: (i + 1) * wordDur }));
+  } else {
+    words = words.map(w => ({ word: w.word, start: Math.max(0, (w.start || 0) - clipStart), end: Math.max(0.1, (w.end || 0) - clipStart) }));
+  }
+
+  // Group into ~4 words per caption card
+  let srt = '';
+  let cardIdx = 1;
+  const chunkSize = 4;
+  for (let i = 0; i < words.length; i += chunkSize) {
+    const chunk = words.slice(i, i + chunkSize);
+    const sTime = formatSRTTime(chunk[0].start);
+    const eTime = formatSRTTime(chunk[chunk.length - 1].end);
+    const text = chunk.map(w => w.word).join(' ');
+    srt += `${cardIdx++}\n${sTime} --> ${eTime}\n${text}\n\n`;
+  }
+
+  downloadTextFile(srt.trim(), `clip-${(editingClipIndex + 1) || 1}-subtitles.srt`, 'text/plain');
+  showToast('Downloaded .SRT subtitles!', 'success');
+});
+
+document.getElementById('btn-editor-export-ass')?.addEventListener('click', () => {
+  if (!currentClipData) return;
+  const custom = currentClipData.custom || {};
+  const clipStart = currentClipData.editStart ?? currentClipData.start ?? 0;
+  const presetId = custom.captionPreset || 'bold';
+  const marginV = custom.marginV ?? 420;
+  const fontFamily = custom.fontFamily || 'Outfit';
+  const fontSize = Math.round((custom.fontSize || 52) * 1.5);
+  const textCase = custom.textCase || 'uppercase';
+
+  function hexToAss(hex, alpha = '00') {
+    if (!hex || typeof hex !== 'string') return '&H00FFFFFF';
+    let clean = hex.replace('#', '').trim();
+    if (clean.length === 3) clean = clean.split('').map(c => c + c).join('');
+    if (clean.length !== 6) return '&H00FFFFFF';
+    return `&H${alpha}${clean.slice(4, 6)}${clean.slice(2, 4)}${clean.slice(0, 2)}`.toUpperCase();
+  }
+
+  const primaryCol = hexToAss(custom.textColor || '#ffffff');
+  const highlightCol = hexToAss(custom.highlightColor || (presetId === 'karaoke' ? '#00FF66' : '#fee440'));
+
+  let words = currentClipData.words;
+  if (!words || words.length === 0) {
+    const textWords = (currentClipData.text || '').trim().split(/\s+/).filter(Boolean);
+    const dur = Math.max(1, (currentClipData.end || 30) - (currentClipData.start || 0));
+    const wordDur = dur / Math.max(1, textWords.length);
+    words = textWords.map((w, i) => ({ word: w, start: i * wordDur, end: (i + 1) * wordDur }));
+  } else {
+    words = words.map(w => ({ word: w.word, start: Math.max(0, (w.start || 0) - clipStart), end: Math.max(0.1, (w.end || 0) - clipStart) }));
+  }
+
+  let ass = `[Script Info]
+Title: L2S Professional Subtitles
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,${fontFamily},${fontSize},${primaryCol},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,40,40,${marginV},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+  // Chunk into 3-4 word lines with safe escaping and active highlight tags
+  const chunkSize = presetId === 'pop' ? 2 : 4;
+  for (let i = 0; i < words.length; i += chunkSize) {
+    const group = words.slice(i, i + chunkSize);
+    for (let j = 0; j < group.length; j++) {
+      const activeW = group[j];
+      const start = formatASSTimeLocal(activeW.start);
+      const nextW = group[j + 1];
+      const end = formatASSTimeLocal(nextW ? nextW.start : (activeW.end + 0.1));
+
+      let lineText = '';
+      for (let k = 0; k < group.length; k++) {
+        let txt = group[k].word || '';
+        if (textCase === 'uppercase') txt = txt.toUpperCase();
+        else if (textCase === 'capitalize') txt = txt.charAt(0).toUpperCase() + txt.slice(1);
+        txt = txt.replace(/\\/g, '/').replace(/\{/g, '｛').replace(/\}/g, '｝');
+
+        if (k === j) {
+          lineText += `{\\c${highlightCol}\\fscx110\\fscy110}${txt}{\\c${primaryCol}\\fscx100\\fscy100} `;
+        } else {
+          lineText += `${txt} `;
+        }
+      }
+      ass += `Dialogue: 0,${start},${end},Default,,0,0,0,,${lineText.trim()}\n`;
+    }
+  }
+
+  downloadTextFile(ass, `clip-${(editingClipIndex + 1) || 1}-subtitles.ass`, 'text/plain');
+  showToast('Downloaded professional .ASS subtitles!', 'success');
+});
 
 // ─── Aspect Ratio Logic ─────────────────────
 function setEditorRatio(ratio) {
@@ -1043,8 +2109,9 @@ function setEditorRatio(ratio) {
     '9:16': '9/16',
     '16:9': '16/9',
     '1:1': '1/1',
+    '4:5': '4/5',
   };
-  els.editorCanvasContainer.style.aspectRatio = ratioMap[ratio] || '1/1';
+  els.editorCanvasContainer.style.aspectRatio = ratioMap[ratio] || '9/16';
   
   if (els.editorValRatio) {
     els.editorValRatio.textContent = ratio;
@@ -1062,7 +2129,12 @@ els.ratioSelector.querySelectorAll('.ratio-btn').forEach(btn => {
 // ─── Captions Toggle ────────────────────────
 els.editorCaptionsToggle.addEventListener('change', () => {
   const enabled = els.editorCaptionsToggle.checked;
-  els.editorValCaptions.textContent = enabled ? 'ON' : 'OFF';
+  if (els.editorValCaptions) els.editorValCaptions.textContent = enabled ? 'ON' : 'OFF';
+  if (currentClipData) {
+    currentClipData.custom = currentClipData.custom || {};
+    currentClipData.custom.captionsEnabled = enabled;
+    renderEditorCaption(els.editorVideo.currentTime);
+  }
 });
 
 // ─── Volume Controls ────────────────────────
@@ -1098,7 +2170,7 @@ function updateEditorLabels() {
   if (len < 0) len = 0;
   els.editorValLength.textContent = `${len.toFixed(1)}s`;
 
-  const zoom = parseFloat(els.editorZoom.value);
+  const zoom = Math.min(3.0, Math.max(0.1, parseFloat(els.editorZoom.value) || 1.0));
   els.editorValZoom.textContent = `${zoom.toFixed(1)}x`;
 
   const bright = 0.0;
@@ -1201,27 +2273,28 @@ els.editorSaveBtn.addEventListener("click", async () => {
       if (durBadge) durBadge.textContent = `${allClips[editingClipIndex].duration}s`;
     }
 
-    if (editorReRenderIndex >= 0) {
-      const reRenderIdx = editorReRenderIndex;
-      showToast("Re-rendering clip...", "info");
-      closeEditor();
-      
-      try {
-        const clipData = allClips[editingClipIndex];
-        const res = await fetch('/api/re-render', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clipIndex: reRenderIdx, clipData }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Re-render failed');
-      } catch (err) {
-        appendLog(`Re-render failed: ${err.message}`, 'error');
-        showToast('Re-render failed', 'error');
-      }
-    } else {
-      showToast("Clip settings saved!", "success");
-      closeEditor();
+    showToast("Clip settings saved!", "success");
+    closeEditor();
+  }
+});
+
+// Apply & Re-Render Button
+document.getElementById('editor-rerender-btn')?.addEventListener('click', async () => {
+  if (editingClipIndex >= 0 && currentClipData) {
+    els.editorSaveBtn.click();
+    showToast(`Re-rendering Clip ${editingClipIndex + 1}...`, 'info');
+    try {
+      const clipData = allClips[editingClipIndex];
+      const res = await fetch('/api/re-render', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clipIndex: editingClipIndex, clipData }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Re-render failed');
+      showToast('Re-rendering queued!', 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
     }
   }
 });
@@ -1241,23 +2314,127 @@ function parseTimeStr(str) {
 
 // Get all valid timestamps as [{start, end}]
 function getTimestamps() {
-  const rows = els.timestampRows.querySelectorAll('.timestamp-row');
   const result = [];
-  rows.forEach(row => {
-    const startStr = row.querySelector('.ts-start')?.value;
-    const endStr = row.querySelector('.ts-end')?.value;
-    const start = parseTimeStr(startStr);
-    const end = parseTimeStr(endStr);
+
+  // 1. Gather all added chips from #ts-chip-list
+  const chipContainer = els.tsChipList || document.getElementById('ts-chip-list');
+  if (chipContainer) {
+    const chips = chipContainer.querySelectorAll('.ts-chip');
+    chips.forEach(chip => {
+      const start = parseFloat(chip.dataset.start);
+      const end = parseFloat(chip.dataset.end);
+      if (!isNaN(start) && !isNaN(end) && end > start) {
+        result.push({ start, end });
+      }
+    });
+  }
+
+  // 2. Check if user typed into #ts-start / #ts-end directly without clicking "+ Add"
+  const startInput = els.tsStart || document.getElementById('ts-start');
+  const endInput = els.tsEnd || document.getElementById('ts-end');
+  if (startInput && endInput && startInput.value.trim() && endInput.value.trim()) {
+    const start = parseTimeStr(startInput.value.trim());
+    const end = parseTimeStr(endInput.value.trim());
     if (!isNaN(start) && !isNaN(end) && end > start) {
-      result.push({ start, end });
+      if (!result.some(r => Math.abs(r.start - start) < 0.1 && Math.abs(r.end - end) < 0.1)) {
+        result.push({ start, end });
+      }
     }
-  });
+  }
+
+  // 3. Fallback: check #timestamp-rows if present
+  if (els.timestampRows) {
+    const rows = els.timestampRows.querySelectorAll('.timestamp-row');
+    rows.forEach(row => {
+      const startStr = row.querySelector('.ts-start')?.value;
+      const endStr = row.querySelector('.ts-end')?.value;
+      const start = parseTimeStr(startStr);
+      const end = parseTimeStr(endStr);
+      if (!isNaN(start) && !isNaN(end) && end > start) {
+        if (!result.some(r => Math.abs(r.start - start) < 0.1 && Math.abs(r.end - end) < 0.1)) {
+          result.push({ start, end });
+        }
+      }
+    });
+  }
+
   return result;
 }
 
-// Add timestamp row
+// ─── Workspace Manual Timestamp Chips (#ts-add-btn & #ts-chip-list) ───
+(function initTimestampControls() {
+  const addBtn = els.tsAddBtn || document.getElementById('ts-add-btn');
+  const startInput = els.tsStart || document.getElementById('ts-start');
+  const endInput = els.tsEnd || document.getElementById('ts-end');
+  const chipList = els.tsChipList || document.getElementById('ts-chip-list');
+  const modeToggle = els.tsModeToggle || document.getElementById('ts-mode-toggle');
+
+  function updateToggleVisibility() {
+    if (!modeToggle) return;
+    const count = chipList ? chipList.querySelectorAll('.ts-chip').length : 0;
+    modeToggle.style.display = count > 0 ? 'block' : 'none';
+  }
+
+  function addChip(start, end) {
+    if (!chipList) return;
+    const chip = document.createElement('div');
+    chip.className = 'ts-chip';
+    chip.dataset.start = start;
+    chip.dataset.end = end;
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;background:rgba(139,92,246,0.18);border:1px solid rgba(139,92,246,0.35);padding:4px 10px;border-radius:20px;font-size:0.75rem;margin:3px 4px 3px 0;color:#e2e8f0;';
+    chip.innerHTML = `
+      <span>⏱️ ${formatDuration(start)} → ${formatDuration(end)} (${(end - start).toFixed(0)}s)</span>
+      <button type="button" class="ts-chip-remove" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:1rem;line-height:1;padding:0 2px" title="Remove">&times;</button>
+    `;
+    chip.querySelector('.ts-chip-remove').addEventListener('click', () => {
+      chip.remove();
+      updateToggleVisibility();
+    });
+    chipList.appendChild(chip);
+    updateToggleVisibility();
+  }
+
+  addBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!startInput || !endInput) return;
+    const start = parseTimeStr(startInput.value.trim());
+    const end = parseTimeStr(endInput.value.trim());
+
+    if (isNaN(start) || isNaN(end)) {
+      showToast('Please enter valid timestamps (e.g. 1:20 to 2:05)', 'warning');
+      return;
+    }
+    if (end <= start) {
+      showToast('End time must be greater than start time', 'warning');
+      return;
+    }
+    addChip(start, end);
+    startInput.value = '';
+    endInput.value = '';
+    startInput.focus();
+  });
+
+  // Enter key support in end input
+  endInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addBtn?.click();
+    }
+  });
+
+  // Preview seek on startInput blur
+  startInput?.addEventListener('blur', () => {
+    const time = parseTimeStr(startInput.value.trim());
+    if (!isNaN(time) && els.workspaceLocalVideo?.readyState >= 1) {
+      els.workspaceLocalVideo.currentTime = time;
+    }
+  });
+})();
+
+// Legacy/Alternative row support
 let tsCounter = 1;
-els.btnAddTs.addEventListener('click', () => {
+els.btnAddTs?.addEventListener('click', () => {
+  if (!els.timestampRows) return;
   const row = document.createElement('div');
   row.className = 'timestamp-row';
   row.setAttribute('data-ts-index', tsCounter++);
@@ -1269,16 +2446,121 @@ els.btnAddTs.addEventListener('click', () => {
   `;
   els.timestampRows.appendChild(row);
   bindRemoveBtn(row.querySelector('.btn-remove-ts'));
-  
-  // Seek workspace video to help user pick timestamps
+  bindTimestampRow(row);
+  row.querySelector('.ts-start').focus();
+});
+
+// ─── FIX: Bind timestamp row inputs ──────────
+// Uses 'blur' for video seeking (not 'change') so tabbing does NOT trigger seeks
+// Uses 'keydown' to prevent Enter from submitting the form
+function bindTimestampRow(row) {
   const startInput = row.querySelector('.ts-start');
-  startInput.addEventListener('change', () => {
-    const time = parseTimeStr(startInput.value);
-    if (!isNaN(time) && els.workspaceLocalVideo.readyState >= 1) {
+  const endInput = row.querySelector('.ts-end');
+
+  if (!startInput || !endInput) return;
+
+  // Helper: parse time string to seconds
+  function validateTime(str) {
+    if (!str) return NaN;
+    const parts = str.match(/^(\d+):(\d+):?(\d+)?$|^(\d+(?:\.\d+)?)$/);
+    if (!parts) return NaN;
+    
+    if (parts[4] !== undefined) {
+      // Seconds only: "30" → 30
+      return parseFloat(parts[4]);
+    } else {
+      // mm:ss or mm:ss:ms format
+      const min = parseInt(parts[1], 10);
+      const sec = parseInt(parts[2], 10);
+      const ms = parts[3] ? parseInt(parts[3], 10) : 0;
+      return min * 60 + sec + ms / 1000;
+    }
+  }
+
+  // Seek video when user LEAVES the field (blur) — not on change/Enter
+  startInput.addEventListener('blur', () => {
+    const time = validateTime(startInput.value);
+    if (!isNaN(time) && els.workspaceLocalVideo?.readyState >= 1) {
       els.workspaceLocalVideo.currentTime = time;
     }
+    
+    // Auto-add new row if both fields filled
+    const end = validateTime(endInput.value);
+    if (!isNaN(time) && !isNaN(end) && end > time) {
+      const lastRow = document.querySelector('.timestamp-row:last-of-type');
+      if (lastRow === row) {
+        // Check if there's already an empty row below
+        const allRows = document.querySelectorAll('.timestamp-row');
+        const nextEmpty = Array.from(allRows).find(r => 
+          !validateTime(r.querySelector('.ts-start')?.value) &&
+          !validateTime(r.querySelector('.ts-end')?.value)
+        );
+        
+        if (!nextEmpty) {
+          // Only add if this was the last row and it's now complete
+          setTimeout(() => els.btnAddTs?.click(), 100);
+        }
+      }
+    }
   });
-});
+
+  endInput.addEventListener('blur', () => {
+    const time = validateTime(endInput.value);
+    if (!isNaN(time) && els.workspaceLocalVideo?.readyState >= 1) {
+      els.workspaceLocalVideo.currentTime = time;
+    }
+    
+    // Auto-add new row if both fields filled
+    const start = validateTime(startInput.value);
+    if (!isNaN(start) && !isNaN(time) && time > start) {
+      const lastRow = document.querySelector('.timestamp-row:last-of-type');
+      if (lastRow === row) {
+        const allRows = document.querySelectorAll('.timestamp-row');
+        const nextEmpty = Array.from(allRows).find(r => 
+          !validateTime(r.querySelector('.ts-start')?.value) &&
+          !validateTime(r.querySelector('.ts-end')?.value)
+        );
+        
+        if (!nextEmpty) {
+          setTimeout(() => els.btnAddTs?.click(), 100);
+        }
+      }
+    }
+  });
+
+  // Handle key down on both inputs
+  [startInput, endInput].forEach((input, idx) => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        // Allow default Tab behavior (move to next field)
+        return;
+      }
+      
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (idx === 0) {
+          // In start input: move to end input on Enter
+          endInput.focus();
+          endInput.select();
+        } else {
+          // In end input: trigger add new row on Enter
+          const start = validateTime(startInput.value);
+          const end = validateTime(endInput.value);
+          
+          if (!isNaN(start) && !isNaN(end) && end > start) {
+            // Valid range: add new row
+            setTimeout(() => els.btnAddTs?.click(), 0);
+          } else {
+            // Invalid: show hint
+            showToast('Invalid time range. End must be after start.', 'warning');
+          }
+        }
+      }
+    });
+  });
+}
 
 // Remove timestamp row
 function bindRemoveBtn(btn) {
@@ -1297,7 +2579,68 @@ function bindRemoveBtn(btn) {
 }
 
 // Bind existing remove buttons
-els.timestampRows.querySelectorAll('.btn-remove-ts').forEach(bindRemoveBtn);
+els.timestampRows?.querySelectorAll('.btn-remove-ts').forEach(bindRemoveBtn);
+
+// ─── Quality Selector & Chips ────────────────
+(function initQualitySelector() {
+  const qualitySelect = document.getElementById('quality-select');
+  if (qualitySelect) {
+    qualitySelect.addEventListener('change', (e) => {
+      videoQuality = e.target.value;
+      // Sync chip UI
+      document.querySelectorAll('#source-quality-chips .gen-chip').forEach(c => {
+        c.classList.toggle('active', c.dataset.quality === videoQuality);
+      });
+      if (typeof checkQualityMismatch === 'function') checkQualityMismatch();
+    });
+  }
+
+  // Source Quality Chips (IMAGE 1)
+  const sourceChips = document.querySelectorAll('#source-quality-chips .gen-chip');
+  if (sourceChips && sourceChips.length > 0) {
+    sourceChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        sourceChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        videoQuality = chip.dataset.quality || 'best';
+        if (qualitySelect) qualitySelect.value = videoQuality;
+        if (typeof checkQualityMismatch === 'function') checkQualityMismatch();
+      });
+    });
+  }
+
+  const exportChips = document.querySelectorAll('#export-profile-chips .export-chip');
+  const exportProfileHints = {
+    fast: '⚡ Fast: High-speed draft render (H.264 CQ 28 / CRF 26, 128k AAC audio, 30fps CFR)',
+    balanced: '⚖️ Balanced: Optimal clarity & render speed (H.264 CQ 22 / CRF 22, 192k AAC audio, fast-start)',
+    high: '💎 High Quality: Pristine for YouTube Shorts & Reels (H.264 CQ 18 / CRF 18, 256k audio, max 60fps)',
+    max: '👑 Maximum: Studio master fidelity (H.264 CQ 15 / CRF 15, 320k studio audio, near lossless)',
+  };
+
+  if (exportChips && exportChips.length > 0) {
+    exportChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        exportChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        exportQuality = chip.dataset.profile || 'balanced';
+        const hintEl = document.getElementById('export-profile-hint');
+        if (hintEl) {
+          hintEl.textContent = exportProfileHints[exportQuality] || exportProfileHints.balanced;
+        }
+      });
+    });
+  }
+
+  // Detect and display GPU status badge
+  fetch('/api/export-profiles').then(r => r.json()).then(data => {
+    const badge = document.getElementById('export-profile-badge');
+    if (badge && data.detectedEncoder) {
+      const isGpu = data.detectedEncoder.codec.includes('nvenc');
+      badge.textContent = isGpu ? '⚡ NVENC GPU' : '💻 CPU libx264';
+      badge.style.color = isGpu ? 'var(--accent-cyan)' : 'var(--text-muted)';
+    }
+  }).catch(() => {});
+})();
 
 // ─── Publish Section Logic ───────────────────
 let platformConnections = { instagram: false, youtube: false };
@@ -1326,9 +2669,48 @@ async function checkConnectionStatus() {
         setPlatformConnected('instagram', data.connections.instagram.username);
       }
     }
+
+    // Show YouTube Quota badge if YouTube is connected
+    if (data.ytQuota) {
+      updateYouTubeQuotaBadge(data.ytQuota);
+    }
+
+    // Show Instagram localhost warning if running locally
+    checkInstagramLocalhostWarning();
+
   } catch (e) {
     // Server not ready yet
   }
+}
+
+function checkInstagramLocalhostWarning() {
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const warnEl = document.getElementById('ig-localhost-warn');
+  if (warnEl) {
+    warnEl.style.display = isLocalhost ? 'block' : 'none';
+  }
+}
+
+function updateYouTubeQuotaBadge(quota) {
+  const badgeEl = document.getElementById('yt-quota-badge');
+  if (!badgeEl) return;
+
+  const pct = Math.round((quota.uploadsToday / quota.maxUploads) * 100);
+  const isWarning = quota.uploadsToday >= quota.maxUploads - 1;
+  const isDanger = quota.isAtLimit;
+
+  badgeEl.innerHTML = `
+    <div class="quota-bar-row">
+      <span class="quota-label">📊 Today's Uploads: <strong>${quota.uploadsToday} / ${quota.maxUploads}</strong></span>
+      <span class="quota-reset">Resets midnight PT</span>
+    </div>
+    <div class="quota-bar">
+      <div class="quota-bar-fill ${isDanger ? 'danger' : isWarning ? 'warning' : ''}" style="width:${Math.max(pct, 4)}%"></div>
+    </div>
+    ${isDanger ? '<div class="quota-limit-msg error">⛔ Daily upload limit reached (6/6 used). Try again tomorrow at midnight Pacific Time.</div>' : ''}
+    ${isWarning && !isDanger ? '<div class="quota-limit-msg warning">⚠️ Last upload slot remaining for today.</div>' : ''}
+  `;
+  badgeEl.style.display = 'block';
 }
 
 function setPlatformConnected(platform, username) {
@@ -1340,6 +2722,15 @@ function setPlatformConnected(platform, username) {
   statusEl.classList.add('connected');
   btnEl.innerHTML = `✓ Connected`;
   btnEl.classList.add('connected');
+
+  // Show quota badge when YouTube connects
+  if (platform === 'youtube') {
+    fetch('/api/youtube-quota')
+      .then(r => r.json())
+      .then(q => updateYouTubeQuotaBadge(q))
+      .catch(() => {});
+  }
+
   updatePublishButton();
 }
 
@@ -1358,7 +2749,9 @@ function setPlatformDisconnected(platform) {
 function updatePublishButton() {
   const anyConnected = platformConnections.instagram || platformConnections.youtube;
   const hasFiles = renderedFiles.length > 0 || selectedClips.size > 0;
-  els.btnPublish.disabled = !(anyConnected && hasFiles);
+  if (els.btnPublish) {
+    els.btnPublish.disabled = !(anyConnected && hasFiles);
+  }
 }
 
 checkConnectionStatus();
@@ -1377,7 +2770,7 @@ window.addEventListener('message', (event) => {
 });
 
 // ─── Instagram Connect ──────────────────────
-els.btnConnectIg.addEventListener('click', async () => {
+els.btnConnectIg?.addEventListener('click', async () => {
   if (platformConnections.instagram) {
     try {
       await fetch('/api/disconnect/instagram', { method: 'POST' });
@@ -1411,7 +2804,7 @@ els.btnConnectIg.addEventListener('click', async () => {
 });
 
 // ─── YouTube Connect ────────────────────────
-els.btnConnectYt.addEventListener('click', async () => {
+els.btnConnectYt?.addEventListener('click', async () => {
   if (platformConnections.youtube) {
     try {
       await fetch('/api/disconnect/youtube', { method: 'POST' });
@@ -1557,10 +2950,12 @@ function updatePublishProgress(clipIndex, total, status, result) {
 }
 
 // ─── Publish Clips ──────────────────────────
-els.btnPublish.addEventListener('click', async () => {
-  if (els.btnPublish.disabled) return;
-  els.btnPublish.disabled = true;
-  els.btnPublish.classList.add('loading');
+els.btnPublish?.addEventListener('click', async () => {
+  if (els.btnPublish?.disabled) return;
+  if (els.btnPublish) {
+    els.btnPublish.disabled = true;
+    els.btnPublish.classList.add('loading');
+  }
 
   if (publishProgressEl) publishProgressEl.innerHTML = '';
 
@@ -1604,3 +2999,1250 @@ els.btnPublish.addEventListener('click', async () => {
     els.btnPublish.classList.remove('loading');
   }
 });
+
+// ─── Pre-Generate Ratio & Zoom ───────────────
+(function initPreGen() {
+  const ratioChips = document.querySelectorAll('#ratio-chips .gen-chip');
+  const zoomSlider = document.getElementById('pre-gen-zoom-slider');
+  const zoomVal = document.getElementById('pre-gen-zoom-val');
+  const ratioDisplay = document.getElementById('current-ratio-display');
+  const ratioSelect = document.getElementById('pre-gen-ratio-select');
+
+  // Also support legacy ratio buttons if present
+  const ratioBtns = els.preGenRatioBtns;
+  const legacyZoom = els.preGenZoom;
+
+  if (ratioChips && ratioChips.length > 0) {
+    ratioChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        ratioChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        preGenRatio = chip.dataset.ratio || '9:16';
+        if (ratioDisplay) ratioDisplay.textContent = preGenRatio;
+        if (ratioSelect) ratioSelect.value = preGenRatio;
+      });
+    });
+  }
+
+  // Ratio button clicks (legacy fallback)
+  ratioBtns?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.ratio-btn');
+    if (!btn) return;
+    ratioBtns.querySelectorAll('.ratio-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    preGenRatio = btn.dataset.ratio;
+    if (ratioDisplay) ratioDisplay.textContent = preGenRatio;
+    if (ratioSelect) ratioSelect.value = preGenRatio;
+  });
+
+  // Zoom slider (redesigned)
+  zoomSlider?.addEventListener('input', () => {
+    preGenZoom = Math.min(3.0, Math.max(0.1, parseFloat(zoomSlider.value) || 1.0));
+    if (zoomVal) zoomVal.textContent = `${preGenZoom.toFixed(1)}x`;
+  });
+
+  // Zoom slider (legacy)
+  legacyZoom?.addEventListener('input', () => {
+    preGenZoom = Math.min(3.0, Math.max(0.1, parseFloat(legacyZoom.value) || 1.0));
+    if (els.preGenZoomVal) els.preGenZoomVal.textContent = `${preGenZoom.toFixed(1)}x`;
+  });
+})();
+
+// ─── Number of Clips Chips & Custom Input ─────
+(function initClipCountChips() {
+  const countChips = document.querySelectorAll('#clip-count-chips .gen-chip');
+  const countSelect = document.getElementById('clip-count-select');
+  const customWrap = document.getElementById('custom-clip-count-input-wrap');
+  const customInput = document.getElementById('custom-clip-count-input');
+
+  if (countChips && countChips.length > 0) {
+    countChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        countChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        const count = chip.dataset.count;
+        if (count === 'custom') {
+          if (customWrap) customWrap.style.display = 'block';
+          if (customInput) {
+            customInput.focus();
+            if (customInput.value) {
+              clipCount = parseInt(customInput.value, 10) || 'auto';
+            }
+          }
+        } else {
+          if (customWrap) customWrap.style.display = 'none';
+          clipCount = count === 'auto' ? 'auto' : parseInt(count, 10);
+          if (countSelect) countSelect.value = count;
+        }
+      });
+    });
+  }
+
+  if (customInput) {
+    customInput.addEventListener('input', () => {
+      const val = parseInt(customInput.value, 10);
+      if (!isNaN(val) && val > 0) {
+        clipCount = val;
+      }
+    });
+  }
+})();
+
+// ─── How To Use These (Radio Pills) ───────────
+(function initHowToUsePills() {
+  const pills = document.querySelectorAll('#how-to-use-pills .how-pill, .how-to-use-pills .how-pill');
+  const tsOnlyToggle = document.getElementById('ts-only-toggle');
+
+  pills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      pills.forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      const radio = pill.querySelector('input[type="radio"]');
+      if (radio) {
+        radio.checked = true;
+        if (tsOnlyToggle) {
+          tsOnlyToggle.checked = (radio.value === 'only');
+        }
+        updateClipCountVisibility();
+      }
+    });
+  });
+})();
+
+// ─── Clip Mode & Count Visibility ─────────────
+function updateClipCountVisibility() {
+  const mode = document.querySelector('input[name="clip-mode"]:checked')?.value || 'add';
+  const group = document.getElementById('clip-count-group');
+  if (group) {
+    group.style.display = mode === 'add' ? 'flex' : 'none';
+  }
+}
+document.querySelectorAll('input[name="clip-mode"]').forEach(radio => {
+  radio.addEventListener('change', updateClipCountVisibility);
+});
+updateClipCountVisibility();
+
+// ─── Bottom Homepage System Status (Section 13) ───────────────
+async function loadHomepageSystemStatus() {
+  try {
+    // 1. Providers (Ollama & Groq)
+    const provRes = await fetch('/api/providers');
+    if (provRes.ok) {
+      const provData = await provRes.json();
+      const ollama = provData.providers?.ollama;
+      const groq = provData.providers?.groq;
+
+      // Ollama Card
+      const badgeOllama = document.getElementById('badge-ollama');
+      const statOllamaDaemon = document.getElementById('stat-ollama-daemon');
+      const statOllamaModel = document.getElementById('stat-ollama-model');
+      const statOllamaInst = document.getElementById('stat-ollama-installed');
+
+      if (ollama) {
+        const isOnline = ollama.status === 'online';
+        if (badgeOllama) {
+          badgeOllama.textContent = isOnline ? 'ONLINE' : 'OFFLINE';
+          badgeOllama.className = `sys-badge ${isOnline ? 'badge-ok' : 'badge-warn'}`;
+        }
+        if (statOllamaDaemon) {
+          statOllamaDaemon.textContent = isOnline ? 'Running (11434)' : 'Not Connected';
+        }
+        if (statOllamaModel) {
+          statOllamaModel.textContent = ollama.selectedModel || 'llama3.2:3b';
+        }
+        if (statOllamaInst) {
+          statOllamaInst.textContent = isOnline ? 'Ready (Local GPU/CPU)' : 'Daemon Inactive';
+        }
+      }
+
+      // Groq Card
+      const badgeGroq = document.getElementById('badge-groq');
+      const statGroqApi = document.getElementById('stat-groq-api');
+      const statGroqKey = document.getElementById('stat-groq-key');
+      const statGroqModel = document.getElementById('stat-groq-model');
+
+      if (groq) {
+        const hasKey = !!groq.hasApiKey;
+        if (badgeGroq) {
+          badgeGroq.textContent = hasKey ? 'READY' : 'NEEDS KEY';
+          badgeGroq.className = `sys-badge ${hasKey ? 'badge-ok' : 'badge-warn'}`;
+        }
+        if (statGroqApi) {
+          statGroqApi.textContent = hasKey ? 'Configured (LPUs)' : 'Needs API Key';
+        }
+        if (statGroqKey) {
+          statGroqKey.textContent = hasKey ? 'gsk_... (Configured)' : 'Missing';
+        }
+        if (statGroqModel) {
+          statGroqModel.textContent = groq.selectedModel || 'llama-3.3-70b-versatile';
+        }
+      }
+    }
+
+    // 2. Engine & Hardware Status
+    const [depRes, hwRes, storRes] = await Promise.allSettled([
+      fetch('/api/status').then(r => r.json()),
+      fetch('/api/hardware').then(r => r.json()),
+      fetch('/api/storage/status').then(r => r.json())
+    ]);
+
+    const statHwFfmpeg = document.getElementById('stat-hw-ffmpeg');
+    const statHwYtdlp = document.getElementById('stat-hw-ytdlp');
+    const statHwStorage = document.getElementById('stat-hw-storage');
+    const badgeHw = document.getElementById('badge-hw');
+
+    if (depRes.status === 'fulfilled' && depRes.value) {
+      const deps = depRes.value;
+      if (statHwYtdlp) {
+        statHwYtdlp.textContent = deps.ytdlp ? 'Installed (Ready)' : 'Not Found';
+      }
+    }
+
+    if (hwRes.status === 'fulfilled' && hwRes.value) {
+      const hw = hwRes.value;
+      if (statHwFfmpeg) {
+        if (hw.gpu && hw.gpu.name && !hw.gpu.name.includes('None')) {
+          statHwFfmpeg.textContent = `NVENC GPU (${hw.gpu.name.split(' ')[0]} / ${hw.gpu.vram || 'Active'})`;
+        } else {
+          statHwFfmpeg.textContent = 'CPU (libx264)';
+        }
+      }
+    }
+
+    if (storRes.status === 'fulfilled' && storRes.value) {
+      const stor = storRes.value;
+      if (statHwStorage) {
+        const mb = stor.temp?.sizeBytes ? (stor.temp.sizeBytes / (1024 * 1024)).toFixed(1) : '0.0';
+        statHwStorage.textContent = `${mb} MB Used (Clean)`;
+      }
+    }
+
+    if (badgeHw) {
+      badgeHw.textContent = 'READY';
+      badgeHw.className = 'sys-badge badge-ok';
+    }
+  } catch (err) {
+    console.warn('loadHomepageSystemStatus error:', err.message);
+  }
+}
+
+// Initial load & refresh button
+loadHomepageSystemStatus();
+document.getElementById('btn-refresh-status')?.addEventListener('click', () => {
+  loadHomepageSystemStatus();
+  showToast('System status refreshed', 'success');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── SETTINGS MODAL, AI ENGINES & HARDWARE AUTO-DETECTION ───────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+
+const btnSettingsTrigger = document.getElementById('btn-settings-trigger');
+const settingsModal = document.getElementById('settings-modal');
+const settingsClose = document.getElementById('settings-close');
+const settingsDoneBtn = document.getElementById('settings-done-btn');
+const settingsLlmSelect = document.getElementById('settings-llm-select');
+const settingsModelSelect = document.getElementById('settings-model-select');
+const btnSaveModel = document.getElementById('btn-save-model');
+const settingsModelHint = document.getElementById('settings-model-hint');
+const settingsSttSelect = document.getElementById('settings-stt-select');
+const settingsApiKeyGroup = document.getElementById('settings-api-key-group');
+const settingsApiKeyLabel = document.getElementById('settings-api-key-label');
+const settingsApiKeyInput = document.getElementById('settings-api-key-input');
+const btnSaveApiKey = document.getElementById('btn-save-api-key');
+const settingsApiKeyWarn = document.getElementById('settings-api-key-warn');
+const settingsBtnClean = document.getElementById('settings-btn-clean');
+const settingsBtnYt = document.getElementById('settings-btn-yt');
+const settingsBtnIg = document.getElementById('settings-btn-ig');
+
+async function openSettingsModal() {
+  if (!settingsModal) return;
+  settingsModal.classList.add('visible');
+  await refreshSettingsModal();
+}
+
+function closeSettingsModal() {
+  if (settingsModal) settingsModal.classList.remove('visible');
+}
+
+btnSettingsTrigger?.addEventListener('click', openSettingsModal);
+document.getElementById('btn-open-settings-alert')?.addEventListener('click', openSettingsModal);
+document.getElementById('btn-close-alert')?.addEventListener('click', hideGlobalAlert);
+settingsClose?.addEventListener('click', closeSettingsModal);
+
+async function loadModelsForProvider(providerId) {
+  if (!settingsModelSelect) return;
+  settingsModelSelect.innerHTML = '<option value="">Loading models...</option>';
+  try {
+    const res = await fetch(`/api/providers/models?provider=${providerId}`);
+    const data = await res.json();
+    if (data.models && data.models.length > 0) {
+      settingsModelSelect.innerHTML = data.models
+        .map(m => `<option value="${m}" ${m === data.activeModel ? 'selected' : ''}>${m}</option>`)
+        .join('');
+      if (settingsModelHint) {
+        settingsModelHint.textContent = `Active ${providerId} model: ${data.activeModel || data.models[0]}`;
+      }
+    } else {
+      settingsModelSelect.innerHTML = `<option value="">No models detected</option>`;
+    }
+  } catch (e) {
+    settingsModelSelect.innerHTML = `<option value="">Error loading models</option>`;
+  }
+}
+
+btnSaveModel?.addEventListener('click', async () => {
+  const provider = settingsLlmSelect?.value || 'ollama';
+  const model = settingsModelSelect?.value;
+  if (!model) return;
+  try {
+    const res = await fetch('/api/providers/model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, model }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(`AI Model set to: ${model}`, 'success');
+      if (settingsModelHint) settingsModelHint.textContent = `Active ${provider} model: ${model}`;
+    } else {
+      showToast(data.error || 'Failed to update model', 'error');
+    }
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+});
+
+settingsModelSelect?.addEventListener('change', async (e) => {
+  const provider = settingsLlmSelect?.value || 'ollama';
+  const model = e.target.value;
+  if (!model) return;
+  try {
+    const res = await fetch('/api/providers/model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, model }),
+    });
+    if (res.ok) {
+      if (settingsModelHint) settingsModelHint.textContent = `Active ${provider} model: ${model}`;
+    }
+  } catch (err) {}
+});
+
+settingsDoneBtn?.addEventListener('click', async () => {
+  const llm = settingsLlmSelect?.value;
+  const stt = settingsSttSelect?.value;
+  const model = settingsModelSelect?.value;
+
+  if (llm || stt) {
+    try {
+      const res = await fetch('/api/providers/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ llmId: llm, sttId: stt }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Switch failed');
+
+      if (model) {
+        await fetch('/api/providers/model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: llm, model }),
+        }).catch(() => {});
+      }
+
+      if (data.needsKey) {
+        showGlobalAlert(`${llm.toUpperCase()} is active, but its API key is missing. Ollama is disabled.`);
+      } else {
+        hideGlobalAlert();
+      }
+      showToast(`AI Provider updated: ${llm.toUpperCase()}`, 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  }
+  closeSettingsModal();
+});
+
+async function refreshSettingsModal() {
+  try {
+    const [provRes, hwRes, connRes] = await Promise.all([
+      fetch('/api/providers').then(r => r.json()).catch(() => null),
+      fetch('/api/hardware').then(r => r.json()).catch(() => null),
+      fetch('/api/connection-status').then(r => r.json()).catch(() => null),
+    ]);
+
+    if (provRes) {
+      const activeLLM = provRes.activeLLM || 'ollama';
+      if (settingsLlmSelect) settingsLlmSelect.value = activeLLM;
+      if (settingsSttSelect) settingsSttSelect.value = provRes.activeSTT || 'local_whisper';
+      updateApiKeyUI(activeLLM, provRes.llmProviders);
+      await loadModelsForProvider(activeLLM);
+    }
+
+    if (hwRes) {
+      const gpuName = document.getElementById('hw-gpu-name');
+      const gpuVram = document.getElementById('hw-gpu-vram');
+      const ramTotal = document.getElementById('hw-ram-total');
+      const cpuModel = document.getElementById('hw-cpu-model');
+      const recModel = document.getElementById('hw-recommended-model');
+
+      if (gpuName) gpuName.textContent = hwRes.gpu?.name || 'Integrated / CPU';
+      if (gpuVram) gpuVram.textContent = hwRes.gpu?.vramGB ? `${hwRes.gpu.vramGB} GB GDDR` : 'N/A';
+      if (ramTotal) ramTotal.textContent = hwRes.ram?.totalGB ? `${hwRes.ram.totalGB} GB` : 'System RAM';
+      if (cpuModel) cpuModel.textContent = `${hwRes.cpu?.cores || 4} Cores (${(hwRes.cpu?.model || '').slice(0, 24)})`;
+      if (recModel) recModel.textContent = `✨ ${hwRes.recommendedModel || 'llama3.2:3b'} (${hwRes.tier || 'optimal'})`;
+    }
+
+    if (connRes) {
+      const ytStatus = document.getElementById('settings-yt-status');
+      const igStatus = document.getElementById('settings-ig-status');
+      if (connRes.connections?.youtube?.connected) {
+        if (ytStatus) {
+          ytStatus.textContent = `Connected: ${connRes.connections.youtube.username || 'Channel'}`;
+          ytStatus.style.color = '#10b981';
+        }
+        if (settingsBtnYt) settingsBtnYt.textContent = 'Disconnect';
+      } else {
+        if (ytStatus) {
+          ytStatus.textContent = 'Not Connected';
+          ytStatus.style.color = 'var(--text-muted)';
+        }
+        if (settingsBtnYt) settingsBtnYt.textContent = 'Connect';
+      }
+
+      if (connRes.connections?.instagram?.connected) {
+        if (igStatus) {
+          igStatus.textContent = `Connected: ${connRes.connections.instagram.username || 'Account'}`;
+          igStatus.style.color = '#10b981';
+        }
+        if (settingsBtnIg) settingsBtnIg.textContent = 'Disconnect';
+      } else {
+        if (igStatus) {
+          igStatus.textContent = 'Not Connected';
+          igStatus.style.color = 'var(--text-muted)';
+        }
+        if (settingsBtnIg) settingsBtnIg.textContent = 'Connect';
+      }
+    }
+  } catch (e) {
+    console.warn('[Settings] Error loading settings modal:', e);
+  }
+}
+
+function updateApiKeyUI(activeLLM, providersList) {
+  if (!settingsApiKeyGroup) return;
+  if (activeLLM === 'groq') {
+    settingsApiKeyGroup.style.display = 'block';
+    if (settingsApiKeyLabel) {
+      settingsApiKeyLabel.textContent = 'Groq Cloud API Key (gsk_...)';
+    }
+    const currentProv = (providersList || []).find(p => p.id === 'groq');
+    const configured = currentProv ? currentProv.configured : false;
+
+    if (!configured) {
+      if (settingsApiKeyWarn) settingsApiKeyWarn.style.display = 'block';
+      showGlobalAlert('GROQ is active, but its API key is missing. Please configure GROQ_API_KEY.');
+    } else {
+      if (settingsApiKeyWarn) settingsApiKeyWarn.style.display = 'none';
+      hideGlobalAlert();
+    }
+  } else {
+    settingsApiKeyGroup.style.display = 'none';
+    if (settingsApiKeyWarn) settingsApiKeyWarn.style.display = 'none';
+    hideGlobalAlert();
+  }
+}
+
+settingsLlmSelect?.addEventListener('change', async () => {
+  const chosen = settingsLlmSelect.value;
+  try {
+    const res = await fetch('/api/providers');
+    const data = await res.json();
+    updateApiKeyUI(chosen, data.llmProviders);
+    await loadModelsForProvider(chosen);
+  } catch (e) {}
+});
+
+btnSaveApiKey?.addEventListener('click', async () => {
+  const providerId = settingsLlmSelect?.value;
+  const apiKey = (settingsApiKeyInput?.value || '').trim();
+  if (!apiKey) {
+    showToast('Please enter an API key', 'warning');
+    return;
+  }
+  try {
+    const res = await fetch('/api/providers/key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerId, apiKey }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save key');
+    showToast(`Key saved for ${providerId.toUpperCase()}!`, 'success');
+    if (settingsApiKeyInput) settingsApiKeyInput.value = '';
+    if (settingsApiKeyWarn) settingsApiKeyWarn.style.display = 'none';
+    hideGlobalAlert();
+    await refreshSettingsModal();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+});
+
+settingsBtnClean?.addEventListener('click', async () => {
+  try {
+    const res = await fetch('/api/storage/clean', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cleanOutput: false }),
+    });
+    const data = await res.json();
+    showToast(`Storage cleaned! Freed ${data.freedMB} MB`, 'success');
+  } catch (e) {
+    showToast('Storage clean failed', 'error');
+  }
+});
+
+settingsBtnYt?.addEventListener('click', () => {
+  window.open('/api/connect/youtube', '_blank', 'width=620,height=720');
+  setTimeout(refreshSettingsModal, 2000);
+});
+settingsBtnIg?.addEventListener('click', () => {
+  window.open('/api/connect/instagram', '_blank', 'width=620,height=720');
+  setTimeout(refreshSettingsModal, 2000);
+});
+
+// Initial provider & hardware check on page load
+refreshSettingsModal();
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── PROFESSIONAL CAPTION STUDIO LOGIC ──────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+
+const stageVideoClean = document.getElementById('stage-video-clean');
+const stageVideoA = document.getElementById('stage-video-a');
+const stageVideoB = document.getElementById('stage-video-b');
+const btnStagePlay = document.getElementById('btn-stage-play');
+const stageCurrentTime = document.getElementById('stage-current-time');
+const stageTotalTime = document.getElementById('stage-total-time');
+const stageScrubber = document.getElementById('stage-scrubber');
+const captionOverlayA = document.getElementById('caption-overlay-a');
+const captionOverlayB = document.getElementById('caption-overlay-b');
+const captionBoxA = document.getElementById('caption-box-a');
+const captionBoxB = document.getElementById('caption-box-b');
+const stageStyleAName = document.getElementById('stage-style-a-name');
+const stageStyleBSelect = document.getElementById('stage-style-b-select');
+const presetCardsGrid = document.getElementById('preset-cards-grid');
+const toggleSafeArea = document.getElementById('toggle-safe-area');
+const toggleCaptionsActive = document.getElementById('toggle-captions-active');
+
+// Customizer Controls
+const captionFontFamily = document.getElementById('caption-font-family');
+const captionFontSize = document.getElementById('caption-font-size');
+const captionFontSizeVal = document.getElementById('caption-font-size-val');
+const captionTextColor = document.getElementById('caption-text-color');
+const captionHighlightColor = document.getElementById('caption-highlight-color');
+const captionMarginV = document.getElementById('caption-margin-v');
+const captionMarginVal = document.getElementById('caption-margin-val');
+const captionWordsPerLine = document.getElementById('caption-words-per-line');
+const btnExportSrt = document.getElementById('btn-export-srt');
+const btnExportAss = document.getElementById('btn-export-ass');
+const btnApplyCurrentClip = document.getElementById('btn-apply-current-clip');
+const btnApplyAllClips = document.getElementById('btn-apply-all-clips');
+
+// Sample Words for Live Studio Preview
+const samplePreviewWords = [
+  { word: "Turn", start: 0.0, end: 0.35 },
+  { word: "long-form", start: 0.35, end: 0.75 },
+  { word: "videos", start: 0.75, end: 1.2 },
+  { word: "into", start: 1.2, end: 1.55 },
+  { word: "viral", start: 1.55, end: 2.0 },
+  { word: "vertical", start: 2.0, end: 2.45 },
+  { word: "shorts", start: 2.45, end: 2.9 },
+  { word: "with", start: 2.9, end: 3.2 },
+  { word: "AI!", start: 3.2, end: 3.8 }
+];
+
+let stageDuration = 3.8;
+let stageCurrentPos = 0;
+let stagePlaying = false;
+let stageTimerId = null;
+let activeClipWords = null;
+let allCaptionPresets = [];
+
+// Fetch Presets from Backend
+async function loadCaptionPresets() {
+  try {
+    const res = await fetch('/api/caption-presets');
+    if (!res.ok) return;
+    const data = await res.json();
+    allCaptionPresets = data.presets || [];
+    renderPresetCards();
+  } catch (err) {
+    console.warn('[Caption Studio] Failed to load presets:', err.message);
+  }
+}
+
+function renderPresetCards() {
+  if (!presetCardsGrid || allCaptionPresets.length === 0) return;
+  presetCardsGrid.innerHTML = '';
+
+  allCaptionPresets.forEach(preset => {
+    const card = document.createElement('div');
+    card.className = `preset-card-item ${preset.id === currentCaptionPreset ? 'active' : ''}`;
+    card.dataset.presetId = preset.id;
+
+    // Build miniature visual preview styled according to preset
+    const previewStyle = getPresetInlineStyle(preset.id);
+
+    card.innerHTML = `
+      <div class="preset-item-title">
+        <span>${escapeHtml(preset.name)}</span>
+        ${preset.id === currentCaptionPreset ? '<span class="badge-tag">Active</span>' : ''}
+      </div>
+      <div class="preset-item-preview-badge" style="${previewStyle}">
+        VIRAL CLIP
+      </div>
+      <div class="preset-item-desc">${escapeHtml(preset.description)}</div>
+    `;
+
+    card.addEventListener('click', () => {
+      selectCaptionPreset(preset.id);
+    });
+
+    presetCardsGrid.appendChild(card);
+  });
+}
+
+function selectCaptionPreset(presetId) {
+  currentCaptionPreset = presetId;
+  if (stageStyleAName) {
+    const found = allCaptionPresets.find(p => p.id === presetId);
+    stageStyleAName.textContent = found ? found.name : presetId;
+  }
+
+  // Update active state on cards
+  const cards = presetCardsGrid?.querySelectorAll('.preset-card-item');
+  cards?.forEach(c => {
+    const isActive = c.dataset.presetId === presetId;
+    c.classList.toggle('active', isActive);
+    const tag = c.querySelector('.badge-tag');
+    if (tag) tag.remove();
+    if (isActive) {
+      const titleSpan = c.querySelector('.preset-item-title');
+      if (titleSpan) titleSpan.insertAdjacentHTML('beforeend', '<span class="badge-tag">Active</span>');
+    }
+  });
+
+  // Re-render live overlay
+  renderStageCaptions(stageCurrentPos);
+}
+
+function getPresetInlineStyle(presetId) {
+  switch (presetId) {
+    case 'minimal':
+      return 'background: rgba(0,0,0,0.7); color: #fff; font-family: Inter; font-weight: 600;';
+    case 'cinematic':
+      return 'background: transparent; color: #ffd700; font-family: Outfit; font-weight: 700; letter-spacing: 0.1em;';
+    case 'bold':
+      return 'background: #000; color: #fee440; font-family: Montserrat; font-weight: 900; -webkit-text-stroke: 1px #000;';
+    case 'karaoke':
+      return 'background: rgba(0,0,0,0.8); color: #00f5d4; font-family: Montserrat; font-weight: 800;';
+    case 'pop':
+      return 'background: rgba(157,78,221,0.3); color: #fee440; font-family: Montserrat; font-weight: 900; transform: scale(1.05);';
+    case 'podcast':
+      return 'background: rgba(0,0,0,0.85); color: #ffffff; font-family: Inter; font-weight: 600; border-left: 3px solid #3a86ff;';
+    case 'educational':
+      return 'background: rgba(0,245,212,0.15); color: #00f5d4; font-family: Inter; font-weight: 700;';
+    case 'gaming':
+      return 'background: #050508; color: #06d6a0; font-family: Montserrat; font-weight: 900; text-shadow: 0 0 8px #9d4edd;';
+    default:
+      return 'background: #000; color: #fee440; font-weight: 800;';
+  }
+}
+
+// Stage Time and Scrubber Formatting
+function formatStageTime(secs) {
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  const ms = Math.floor((secs % 1) * 10);
+  return `${m}:${String(s).padStart(2, '0')}.${ms}`;
+}
+
+// Render captions in Viewport A and Viewport B at current timestamp
+function renderStageCaptions(timestamp) {
+  if (!captionBoxA || !captionBoxB) return;
+
+  const words = activeClipWords || samplePreviewWords;
+  const isEnabled = captionCustomSettings.captionsEnabled;
+
+  if (!isEnabled) {
+    captionBoxA.innerHTML = '';
+    captionBoxB.innerHTML = '';
+    return;
+  }
+
+  // Viewport A (Active Selected Preset)
+  captionBoxA.style.fontFamily = captionCustomSettings.fontFamily;
+  captionBoxA.style.fontSize = `${captionCustomSettings.fontSize}px`;
+  captionBoxA.style.color = captionCustomSettings.textColor;
+  if (captionOverlayA) {
+    captionOverlayA.style.bottom = `${captionCustomSettings.bottomMargin / 7}px`;
+  }
+
+  captionBoxA.innerHTML = buildCaptionHTML(words, timestamp, currentCaptionPreset, captionCustomSettings);
+
+  // Viewport B (Comparison Preset)
+  const compPreset = stageStyleBSelect?.value || comparisonCaptionPreset || 'karaoke';
+  captionBoxB.style.fontFamily = captionCustomSettings.fontFamily;
+  captionBoxB.style.fontSize = `${captionCustomSettings.fontSize}px`;
+  captionBoxB.style.color = captionCustomSettings.textColor;
+  if (captionOverlayB) {
+    captionOverlayB.style.bottom = `${captionCustomSettings.bottomMargin / 7}px`;
+  }
+
+  captionBoxB.innerHTML = buildCaptionHTML(words, timestamp, compPreset, captionCustomSettings);
+}
+
+let stageClipStart = 0;
+let studioCurrentClipIndex = -1;
+
+function transformTextCasing(text, textCase) {
+  if (!text) return '';
+  if (textCase === 'uppercase') return text.toUpperCase();
+  if (textCase === 'capitalize') return text.replace(/\b\w/g, l => l.toUpperCase());
+  return text;
+}
+
+function buildCaptionHTML(words, timestamp, presetId, custom) {
+  // Determine active word window based on wordsPerLine setting
+  let windowWords = words;
+  const activeIndex = words.findIndex(w => timestamp >= w.start && timestamp <= w.end);
+  const currentIndex = activeIndex !== -1 ? activeIndex : words.findIndex(w => w.start > timestamp);
+  const safeIdx = currentIndex === -1 ? words.length - 1 : currentIndex;
+
+  if (custom.wordsPerLine === 'single') {
+    windowWords = [words[safeIdx] || words[0]];
+  } else if (custom.wordsPerLine === 'short') {
+    const startIdx = Math.max(0, Math.floor(safeIdx / 3) * 3);
+    windowWords = words.slice(startIdx, startIdx + 3);
+  }
+
+  const textCase = custom.textCase || 'uppercase';
+  const animType = custom.animationType || 'bounce';
+
+  return windowWords.map((w) => {
+    const isActive = timestamp >= w.start && timestamp <= w.end;
+    const isPast = timestamp > w.end;
+    const displayWord = transformTextCasing(w.word, textCase);
+
+    let styleStr = '';
+    let classNames = 'caption-word';
+
+    if (presetId === 'bold') {
+      if (isActive) {
+        classNames += ' active-word';
+        const animCss = animType === 'bounce' ? 'transform: scale(1.22);' : animType === 'glow' ? 'filter: drop-shadow(0 0 8px #fee440);' : '';
+        styleStr = `color: ${custom.highlightColor}; text-shadow: 2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000; ${animCss}`;
+      } else {
+        styleStr = `color: ${custom.textColor}; text-shadow: 2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000;`;
+      }
+    } else if (presetId === 'pop') {
+      if (isActive) {
+        classNames += ' active-word';
+        styleStr = `color: ${custom.highlightColor}; transform: scale(1.25); transition: transform 0.08s ease; text-shadow: 0 0 12px ${custom.highlightColor};`;
+      } else {
+        styleStr = `color: ${custom.textColor};`;
+      }
+    } else if (presetId === 'karaoke') {
+      if (isActive || isPast) {
+        classNames += ' karaoke-active';
+        styleStr = `color: ${custom.highlightColor}; font-weight: 900;`;
+      } else {
+        styleStr = `color: rgba(255,255,255,0.4);`;
+      }
+    } else if (presetId === 'cinematic') {
+      styleStr = isActive ? 'color: #ffd700; letter-spacing: 0.08em;' : 'color: #f1f5f9; letter-spacing: 0.08em;';
+    } else if (presetId === 'gaming') {
+      if (isActive) {
+        styleStr = `color: #06d6a0; text-shadow: 0 0 14px #9d4edd, 2px 2px 0 #000; ${animType === 'bounce' ? 'transform: scale(1.18);' : ''}`;
+      } else {
+        styleStr = 'color: #ffffff; text-shadow: 2px 2px 0 #000;';
+      }
+    } else {
+      styleStr = isActive ? `color: ${custom.highlightColor}; font-weight: 800;` : `color: ${custom.textColor};`;
+    }
+
+    return `<span class="${classNames}" style="${styleStr}">${escapeHtml(displayWord)}</span>`;
+  }).join(' ');
+}
+
+// Stage Playback Sync
+function toggleStagePlayback() {
+  stagePlaying = !stagePlaying;
+  if (btnStagePlay) {
+    btnStagePlay.textContent = stagePlaying ? '⏸ Pause Sync' : '▶ Play Sync';
+  }
+
+  if (stagePlaying) {
+    if (stageVideoClean && stageVideoClean.src) {
+      stageVideoClean.currentTime = stageClipStart + stageCurrentPos;
+      stageVideoClean.play().catch(() => {});
+      if (stageVideoA) {
+        stageVideoA.currentTime = stageClipStart + stageCurrentPos;
+        stageVideoA.play().catch(() => {});
+      }
+      if (stageVideoB) {
+        stageVideoB.currentTime = stageClipStart + stageCurrentPos;
+        stageVideoB.play().catch(() => {});
+      }
+    }
+
+    clearInterval(stageTimerId);
+    stageTimerId = setInterval(() => {
+      stageCurrentPos += 0.05;
+      if (stageCurrentPos >= stageDuration) {
+        stageCurrentPos = 0;
+        if (stageVideoClean && stageVideoClean.src) {
+          stageVideoClean.currentTime = stageClipStart;
+          if (stageVideoA) stageVideoA.currentTime = stageClipStart;
+          if (stageVideoB) stageVideoB.currentTime = stageClipStart;
+        }
+      }
+      updateStageUI();
+    }, 50);
+  } else {
+    clearInterval(stageTimerId);
+    if (stageVideoClean) stageVideoClean.pause();
+    if (stageVideoA) stageVideoA.pause();
+    if (stageVideoB) stageVideoB.pause();
+  }
+}
+
+function updateStageUI() {
+  if (stageCurrentTime) stageCurrentTime.textContent = formatStageTime(stageCurrentPos);
+  if (stageScrubber) {
+    stageScrubber.value = ((stageCurrentPos / Math.max(0.1, stageDuration)) * 100).toFixed(1);
+  }
+  renderStageCaptions(stageCurrentPos);
+}
+
+btnStagePlay?.addEventListener('click', toggleStagePlayback);
+
+stageScrubber?.addEventListener('input', () => {
+  const pct = parseFloat(stageScrubber.value) / 100;
+  stageCurrentPos = pct * stageDuration;
+  if (stageVideoClean && stageVideoClean.src) {
+    stageVideoClean.currentTime = stageClipStart + stageCurrentPos;
+    if (stageVideoA) stageVideoA.currentTime = stageClipStart + stageCurrentPos;
+    if (stageVideoB) stageVideoB.currentTime = stageClipStart + stageCurrentPos;
+  }
+  updateStageUI();
+});
+
+// Style B Dropdown Listener
+stageStyleBSelect?.addEventListener('change', () => {
+  comparisonCaptionPreset = stageStyleBSelect.value;
+  renderStageCaptions(stageCurrentPos);
+});
+
+// Safe Area and Captions Toggle Listeners
+toggleSafeArea?.addEventListener('change', () => {
+  const container = document.querySelector('.stage-viewports-container');
+  if (container) {
+    container.classList.toggle('toggle-safe-area-off', !toggleSafeArea.checked);
+  }
+});
+
+toggleCaptionsActive?.addEventListener('change', () => {
+  captionCustomSettings.captionsEnabled = toggleCaptionsActive.checked;
+  renderStageCaptions(stageCurrentPos);
+});
+
+// Detailed Customizer Form Listeners
+captionFontFamily?.addEventListener('change', () => {
+  captionCustomSettings.fontFamily = captionFontFamily.value;
+  renderStageCaptions(stageCurrentPos);
+});
+
+captionFontSize?.addEventListener('input', () => {
+  captionCustomSettings.fontSize = parseInt(captionFontSize.value, 10);
+  if (captionFontSizeVal) captionFontSizeVal.textContent = `${captionFontSize.value}px`;
+  renderStageCaptions(stageCurrentPos);
+});
+
+captionTextColor?.addEventListener('input', () => {
+  captionCustomSettings.textColor = captionTextColor.value;
+  renderStageCaptions(stageCurrentPos);
+});
+
+captionHighlightColor?.addEventListener('input', () => {
+  captionCustomSettings.highlightColor = captionHighlightColor.value;
+  renderStageCaptions(stageCurrentPos);
+});
+
+captionMarginV?.addEventListener('input', () => {
+  captionCustomSettings.bottomMargin = parseInt(captionMarginV.value, 10);
+  if (captionMarginVal) captionMarginVal.textContent = `${captionMarginV.value}px`;
+  renderStageCaptions(stageCurrentPos);
+});
+
+captionWordsPerLine?.addEventListener('change', () => {
+  captionCustomSettings.wordsPerLine = captionWordsPerLine.value;
+  renderStageCaptions(stageCurrentPos);
+});
+
+// Quick Color Swatches Listener
+const quickSwatches = document.getElementById('quick-swatches');
+quickSwatches?.querySelectorAll('.swatch-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    quickSwatches.querySelectorAll('.swatch-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const color = btn.dataset.color;
+    captionCustomSettings.highlightColor = color;
+    if (captionHighlightColor) captionHighlightColor.value = color;
+    renderStageCaptions(stageCurrentPos);
+  });
+});
+
+// Text Case Buttons Listener
+const captionCaseBtns = document.getElementById('caption-case-btns');
+captionCaseBtns?.querySelectorAll('.btn-case').forEach(btn => {
+  btn.addEventListener('click', () => {
+    captionCaseBtns.querySelectorAll('.btn-case').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    captionCustomSettings.textCase = btn.dataset.case;
+    renderStageCaptions(stageCurrentPos);
+  });
+});
+
+// Position Preset Buttons Listener
+const captionPosPresets = document.getElementById('caption-pos-presets');
+captionPosPresets?.querySelectorAll('.btn-pos').forEach(btn => {
+  btn.addEventListener('click', () => {
+    captionPosPresets.querySelectorAll('.btn-pos').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const pos = parseInt(btn.dataset.pos, 10);
+    captionCustomSettings.bottomMargin = pos;
+    if (captionMarginV) captionMarginV.value = pos;
+    if (captionMarginVal) captionMarginVal.textContent = `${pos}px`;
+    renderStageCaptions(stageCurrentPos);
+  });
+});
+
+// Animation Type Selector
+const captionAnimationType = document.getElementById('caption-animation-type');
+captionAnimationType?.addEventListener('change', () => {
+  captionCustomSettings.animationType = captionAnimationType.value;
+  renderStageCaptions(stageCurrentPos);
+});
+
+// Clip Selection Engine for Caption Studio
+function initStudioClipsList(clips) {
+  const select = document.getElementById('studio-clip-select');
+  if (!select) return;
+  select.innerHTML = '';
+  
+  clips.forEach((clip, idx) => {
+    const opt = document.createElement('option');
+    opt.value = idx;
+    opt.textContent = `Clip ${idx + 1}: ${clip.title ? clip.title.slice(0, 24) : 'Untitled'} (${clip.duration || 0}s)`;
+    select.appendChild(opt);
+  });
+
+  const demoOpt = document.createElement('option');
+  demoOpt.value = -1;
+  demoOpt.textContent = '✨ Demo Sample Words';
+  select.appendChild(demoOpt);
+
+  if (clips.length > 0) {
+    selectStudioClip(0);
+  }
+}
+
+function selectStudioClip(index) {
+  studioCurrentClipIndex = index;
+  const studioSelect = document.getElementById('studio-clip-select');
+  const studioTitle = document.getElementById('studio-active-clip-title');
+  if (studioSelect) studioSelect.value = index;
+
+  // Highlight active clip in reviewGrid
+  const cards = els.reviewGrid?.querySelectorAll('.clip-card');
+  cards?.forEach((c, i) => c.classList.toggle('active-in-studio', i === index));
+
+  if (index === -1 || !allClips[index]) {
+    activeClipWords = samplePreviewWords;
+    stageDuration = 3.8;
+    stageClipStart = 0;
+    if (studioTitle) studioTitle.textContent = 'Demo Sample Preview (3.8s)';
+  } else {
+    const clip = allClips[index];
+    stageClipStart = clip.start || 0;
+    stageDuration = clip.duration || (clip.end - clip.start) || 30;
+
+    if (clip.words && clip.words.length > 0) {
+      activeClipWords = clip.words.map(w => ({
+        word: w.word,
+        start: Math.max(0, w.start - stageClipStart),
+        end: Math.max(0.1, w.end - stageClipStart)
+      }));
+    } else if (clip.text) {
+      const textWords = clip.text.trim().split(/\s+/);
+      const wordDur = stageDuration / Math.max(1, textWords.length);
+      activeClipWords = textWords.map((word, wIdx) => ({
+        word,
+        start: wIdx * wordDur,
+        end: (wIdx + 1) * wordDur
+      }));
+    } else {
+      activeClipWords = samplePreviewWords;
+    }
+
+    if (studioTitle) {
+      studioTitle.textContent = `Clip #${index + 1}: ${clip.title || 'Untitled'} (${Math.round(stageClipStart)}s - ${Math.round(stageClipStart + stageDuration)}s)`;
+    }
+
+    // Stream the downloaded source video into viewports
+    syncCaptionStudioSource('/api/raw_video');
+    if (stageVideoClean) stageVideoClean.currentTime = stageClipStart;
+    if (stageVideoA) stageVideoA.currentTime = stageClipStart;
+    if (stageVideoB) stageVideoB.currentTime = stageClipStart;
+  }
+
+  stageCurrentPos = 0;
+  if (stageTotalTime) stageTotalTime.textContent = formatStageTime(stageDuration);
+  updateStageUI();
+}
+
+// Studio Clip Navigation Buttons
+document.getElementById('studio-clip-select')?.addEventListener('change', (e) => {
+  selectStudioClip(parseInt(e.target.value, 10));
+});
+
+document.getElementById('btn-studio-prev-clip')?.addEventListener('click', () => {
+  if (allClips.length === 0) return;
+  const newIdx = studioCurrentClipIndex <= 0 ? allClips.length - 1 : studioCurrentClipIndex - 1;
+  selectStudioClip(newIdx);
+});
+
+document.getElementById('btn-studio-next-clip')?.addEventListener('click', () => {
+  if (allClips.length === 0) return;
+  const newIdx = studioCurrentClipIndex >= allClips.length - 1 ? 0 : studioCurrentClipIndex + 1;
+  selectStudioClip(newIdx);
+});
+
+// Mode Switcher for Caption Studio
+document.getElementById('nav-caption-studio')?.addEventListener('click', (e) => {
+  const studioSec = document.getElementById('caption-studio-section');
+  if (!studioSec || !studioSec.classList.contains('visible')) {
+    e.preventDefault();
+    showToast('Generate clips first to customize captions in the studio!', 'info');
+  }
+});
+
+// Apply chosen caption style to all clips
+btnApplyAllClips?.addEventListener('click', () => {
+  if (allClips.length === 0) {
+    showToast('No generated clips yet. Generate clips first!', 'info');
+    return;
+  }
+
+  allClips.forEach(clip => {
+    clip.custom = clip.custom || {};
+    clip.custom.captionPreset = currentCaptionPreset;
+    clip.custom.captionsEnabled = captionCustomSettings.captionsEnabled;
+    clip.custom.fontFamily = captionCustomSettings.fontFamily;
+    clip.custom.fontSize = captionCustomSettings.fontSize;
+    clip.custom.textColor = captionCustomSettings.textColor;
+    clip.custom.highlightColor = captionCustomSettings.highlightColor;
+    clip.custom.textCase = captionCustomSettings.textCase;
+    clip.custom.animationType = captionCustomSettings.animationType;
+  });
+
+  showToast(`Applied "${currentCaptionPreset}" style to all ${allClips.length} clips!`, 'success');
+  appendLog(`🎨 Applied caption preset [${currentCaptionPreset}] to all clips`, 'info');
+});
+
+// Apply to current clip
+btnApplyCurrentClip?.addEventListener('click', () => {
+  if (allClips.length === 0) {
+    showToast('No clips available yet', 'info');
+    return;
+  }
+
+  const activeIdx = studioCurrentClipIndex >= 0 ? studioCurrentClipIndex : 0;
+  if (allClips[activeIdx]) {
+    allClips[activeIdx].custom = allClips[activeIdx].custom || {};
+    allClips[activeIdx].custom.captionPreset = currentCaptionPreset;
+    allClips[activeIdx].custom.captionsEnabled = captionCustomSettings.captionsEnabled;
+    allClips[activeIdx].custom.textCase = captionCustomSettings.textCase;
+    allClips[activeIdx].custom.animationType = captionCustomSettings.animationType;
+    showToast(`Applied "${currentCaptionPreset}" to Clip ${activeIdx + 1}!`, 'success');
+  }
+});
+
+// Export Subtitle Files (.SRT / .ASS)
+btnExportSrt?.addEventListener('click', () => {
+  const words = activeClipWords || samplePreviewWords;
+  let srtContent = '';
+  words.forEach((w, i) => {
+    const sTime = formatSRTTime(w.start);
+    const eTime = formatSRTTime(w.end);
+    const textWord = transformTextCasing(w.word, captionCustomSettings.textCase);
+    srtContent += `${i + 1}\n${sTime} --> ${eTime}\n${textWord}\n\n`;
+  });
+
+  downloadTextFile(srtContent, 'clip-captions.srt', 'text/plain');
+  showToast('Downloaded clip-captions.srt', 'success');
+});
+
+btnExportAss?.addEventListener('click', () => {
+  const words = activeClipWords || samplePreviewWords;
+  let assContent = `[Script Info]
+Title: L2S Professional Subtitles
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,${captionCustomSettings.fontFamily},${captionCustomSettings.fontSize * 1.5},&H00FFFFFF,&H0040E4FE,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,2,40,40,${captionCustomSettings.bottomMargin},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+  words.forEach(w => {
+    const sTime = formatASSTimeLocal(w.start);
+    const eTime = formatASSTimeLocal(w.end);
+    const textWord = transformTextCasing(w.word, captionCustomSettings.textCase);
+    assContent += `Dialogue: 0,${sTime},${eTime},Default,,0,0,0,,${textWord}\n`;
+  });
+
+  downloadTextFile(assContent, 'clip-captions.ass', 'text/plain');
+  showToast('Downloaded clip-captions.ass', 'success');
+});
+
+function formatSRTTime(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  const ms = Math.floor((secs % 1) * 1000);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+}
+
+function formatASSTimeLocal(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  const cs = Math.floor((secs % 1) * 100);
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
+function downloadTextFile(text, filename, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Hook Caption Studio Video Sync when a video is loaded in workspace
+function syncCaptionStudioSource(videoSrc) {
+  if (!videoSrc) return;
+  if (stageVideoClean && stageVideoClean.src !== window.location.origin + videoSrc) {
+    stageVideoClean.src = videoSrc;
+  }
+  if (stageVideoA && stageVideoA.src !== window.location.origin + videoSrc) {
+    stageVideoA.src = videoSrc;
+  }
+  if (stageVideoB && stageVideoB.src !== window.location.origin + videoSrc) {
+    stageVideoB.src = videoSrc;
+  }
+}
+
+// Initialize Studio
+if (stageTotalTime) stageTotalTime.textContent = formatStageTime(stageDuration);
+loadCaptionPresets();
+renderStageCaptions(0);
+
+// ─── AI Virality & Optimal Posting Guide Accordion ───────────────────────────
+const viralityTipsToggle = document.getElementById('virality-tips-toggle');
+const viralityTipsContent = document.getElementById('virality-tips-content');
+const viralityTipsChevron = document.getElementById('virality-tips-chevron');
+let viralityTipsLoaded = false;
+
+if (viralityTipsToggle && viralityTipsContent) {
+  viralityTipsToggle.addEventListener('click', async () => {
+    const isExpanded = viralityTipsContent.style.display !== 'none';
+    if (isExpanded) {
+      viralityTipsContent.style.display = 'none';
+      if (viralityTipsChevron) viralityTipsChevron.textContent = '▼';
+    } else {
+      viralityTipsContent.style.display = 'block';
+      if (viralityTipsChevron) viralityTipsChevron.textContent = '▲';
+      if (!viralityTipsLoaded) {
+        viralityTipsContent.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem">Loading virality insights...</div>';
+        try {
+          const res = await fetch('/api/social/recommendations');
+          const data = await res.json();
+          let timesHtml = '';
+          if (Array.isArray(data.bestPostingTimes)) {
+            timesHtml = data.bestPostingTimes.map(t => `
+              <div style="background:rgba(255,255,255,0.03);padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);margin-bottom:6px">
+                <div style="display:flex;justify-content:space-between;font-weight:600;font-size:0.82rem;color:var(--text-primary)">
+                  <span>${escapeHtml(t.platform)}</span>
+                  <span style="color:var(--accent-purple)">${escapeHtml(t.time)}</span>
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${escapeHtml(t.reason)}</div>
+              </div>
+            `).join('');
+          }
+          let genreHtml = '';
+          if (data.genrePrompts) {
+            genreHtml = Object.entries(data.genrePrompts).map(([k, v]) => `
+              <div style="font-size:0.76rem;margin-bottom:4px">
+                <span style="font-weight:600;text-transform:capitalize;color:var(--accent-cyan)">${escapeHtml(k)}:</span>
+                <span style="color:var(--text-secondary)">${escapeHtml(v)}</span>
+              </div>
+            `).join('');
+          }
+          viralityTipsContent.innerHTML = `
+            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:16px;">
+              <div>
+                <div style="font-size:0.76rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px">⏰ Peak Posting Windows (Local)</div>
+                ${timesHtml}
+              </div>
+              <div>
+                <div style="font-size:0.76rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px">⚡ Viral Hook & Pacing Rules</div>
+                <div style="background:rgba(255,255,255,0.03);padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);margin-bottom:8px">
+                  <div style="font-weight:600;font-size:0.8rem;color:#10b981">Optimal Length</div>
+                  <div style="font-size:0.76rem;color:var(--text-secondary);margin-top:2px">${escapeHtml(data.optimalClipLength || '')}</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.03);padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.06)">
+                  <div style="font-weight:600;font-size:0.8rem;color:#f59e0b">Hook Rule (&lt; 2.5s)</div>
+                  <div style="font-size:0.76rem;color:var(--text-secondary);margin-top:2px">${escapeHtml(data.hookTip || '')}</div>
+                </div>
+              </div>
+            </div>
+            ${genreHtml ? `
+              <div style="margin-top:14px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.05)">
+                <div style="font-size:0.76rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">🎯 Genre Virality Strategies</div>
+                ${genreHtml}
+              </div>
+            ` : ''}
+          `;
+          viralityTipsLoaded = true;
+        } catch (err) {
+          viralityTipsContent.innerHTML = `<div style="color:#ef4444;font-size:0.8rem">Failed to load recommendations: ${escapeHtml(err.message)}</div>`;
+        }
+      }
+    }
+  });
+}
