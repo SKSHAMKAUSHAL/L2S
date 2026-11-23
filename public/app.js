@@ -285,6 +285,7 @@ function handleMessage(data) {
 
     case 'render_done':
       renderedFiles = data.files || [];
+      currentJobId = data.jobId || (data.outputDir ? data.outputDir.replace(/^\/output\//, '') : currentJobId);
       showResultsSection(renderedFiles);
       break;
 
@@ -1647,6 +1648,7 @@ function openEditor(index) {
   }, { once: true });
 
   els.editorModal.classList.add("visible");
+  loadCaptionsForEditor(index);
 }
 
 function closeEditor() {
@@ -1660,6 +1662,145 @@ function closeEditor() {
   editingClipIndex = -1;
   currentClipData = null;
   editorReRenderIndex = -1;
+  isEditorDirty = false;
+}
+
+function requestCloseEditor() {
+  if (isEditorDirty) {
+    if (!confirm('You have unsaved caption edits. Are you sure you want to exit without saving?')) {
+      return;
+    }
+  }
+  closeEditor();
+}
+
+// ─── Step 4: Caption Editor Live State & Word List ────
+let currentJobId = '';
+let editorWords = [];
+let isEditorDirty = false;
+
+async function loadCaptionsForEditor(index) {
+  const clipNum = index + 1;
+  const listEl = document.getElementById('editor-caption-rows-list');
+  const countEl = document.getElementById('editor-words-count');
+  if (listEl) listEl.innerHTML = '<div style="font-size:0.75rem;color:var(--text-muted);padding:8px">Loading captions...</div>';
+
+  let words = currentClipData?.words || currentClipData?.chunk?.words || [];
+  if (currentJobId) {
+    try {
+      const res = await fetch(`/api/clips/${currentJobId}/${clipNum}/captions`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.words) && data.words.length > 0) {
+          words = data.words;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch clip captions from API:', e);
+    }
+  }
+
+  editorWords = JSON.parse(JSON.stringify(words));
+  if (currentClipData) currentClipData.words = editorWords;
+  isEditorDirty = false;
+  renderEditorWordsList();
+}
+
+function renderEditorWordsList() {
+  const listEl = document.getElementById('editor-caption-rows-list');
+  const countEl = document.getElementById('editor-words-count');
+  if (!listEl) return;
+  if (countEl) countEl.textContent = `${editorWords.length} words`;
+
+  if (editorWords.length === 0) {
+    listEl.innerHTML = '<div style="font-size:0.75rem;color:var(--text-muted);padding:8px">No word-level captions found for this clip.</div>';
+    return;
+  }
+
+  listEl.innerHTML = '';
+  editorWords.forEach((w, i) => {
+    const row = document.createElement('div');
+    row.className = 'caption-word-row';
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:2px 0;';
+
+    const timeBtn = document.createElement('button');
+    timeBtn.type = 'button';
+    timeBtn.className = 'btn-seek-word';
+    timeBtn.style.cssText = 'font-size:0.7rem;padding:2px 5px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:var(--accent-purple);border-radius:4px;cursor:pointer;font-family:monospace;';
+    const s = Number(w.start) || 0;
+    const mins = Math.floor(s / 60);
+    const secs = (s % 60).toFixed(1).padStart(4, '0');
+    timeBtn.textContent = `${mins}:${secs}`;
+    timeBtn.title = `Seek to ${s.toFixed(2)}s`;
+    timeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (els.editorVideo) {
+        els.editorVideo.currentTime = s;
+        renderEditorCaption(s);
+      }
+    });
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'caption-word-input';
+    input.value = w.word || '';
+    input.style.cssText = 'flex:1;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);color:#fff;border-radius:4px;padding:3px 6px;font-size:0.8rem;';
+    input.addEventListener('input', (e) => {
+      isEditorDirty = true;
+      w.word = e.target.value;
+      if (currentClipData) currentClipData.words = editorWords;
+      if (els.editorVideo) renderEditorCaption(els.editorVideo.currentTime);
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.innerHTML = '&times;';
+    delBtn.title = 'Remove word';
+    delBtn.style.cssText = 'background:none;border:none;color:#ef4444;font-size:1rem;cursor:pointer;padding:0 4px;';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      isEditorDirty = true;
+      editorWords.splice(i, 1);
+      if (currentClipData) currentClipData.words = editorWords;
+      renderEditorWordsList();
+      if (els.editorVideo) renderEditorCaption(els.editorVideo.currentTime);
+    });
+
+    row.appendChild(timeBtn);
+    row.appendChild(input);
+    row.appendChild(delBtn);
+    listEl.appendChild(row);
+  });
+}
+
+async function saveEditorCaptions() {
+  if (!currentJobId || editingClipIndex < 0) {
+    isEditorDirty = false;
+    return;
+  }
+  const clipNum = editingClipIndex + 1;
+  const custom = currentClipData?.custom || {};
+  const preset = custom.captionPreset || 'hormozi';
+  const overrides = {
+    fontSize: Number(document.getElementById('editor-font-size')?.value) || 52,
+    position: Number(els.editorMarginV?.value) || 420,
+    colour: document.getElementById('editor-color-text')?.value || '#ffffff',
+    uppercase: custom.textCase === 'uppercase',
+  };
+
+  try {
+    const res = await fetch(`/api/clips/${currentJobId}/${clipNum}/captions`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ words: editorWords, preset, overrides }),
+    });
+    if (res.ok) {
+      isEditorDirty = false;
+      showToast('Captions saved successfully!', 'success');
+    }
+  } catch (err) {
+    showToast(`Save error: ${err.message}`, 'error');
+  }
 }
 
 // ─── Preset Display Helpers & Shared Style Models ──
@@ -2275,8 +2416,8 @@ els.editorStart.addEventListener('input', () => {
   if(el) el.addEventListener("input", updateEditorLabels);
 });
 
-els.editorCloseBtn.addEventListener("click", closeEditor);
-els.editorCancelBtn.addEventListener("click", closeEditor);
+els.editorCloseBtn.addEventListener("click", requestCloseEditor);
+els.editorCancelBtn.addEventListener("click", requestCloseEditor);
 
 els.editorSaveBtn.addEventListener("click", async () => {
   if (editingClipIndex >= 0 && currentClipData) {
@@ -2312,29 +2453,112 @@ els.editorSaveBtn.addEventListener("click", async () => {
       if (durBadge) durBadge.textContent = `${allClips[editingClipIndex].duration}s`;
     }
 
-    showToast("Clip settings saved!", "success");
+    await saveEditorCaptions();
+    showToast("Clip settings & captions saved!", "success");
     closeEditor();
   }
 });
 
-// Apply & Re-Render Button
+// Find & Replace in All Clips Handler
+document.getElementById('btn-editor-replace-all')?.addEventListener('click', async () => {
+  if (!currentJobId) {
+    showToast('No active rendered job to replace captions', 'error');
+    return;
+  }
+  const findVal = document.getElementById('editor-find-input')?.value;
+  const replaceVal = document.getElementById('editor-replace-input')?.value;
+  const caseSensitive = document.getElementById('editor-replace-case-sensitive')?.checked || false;
+
+  if (!findVal) {
+    showToast('Please enter text to find', 'warning');
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/clips/${currentJobId}/captions/replace`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ find: findVal, replace: replaceVal || '', caseSensitive }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Replace failed');
+    showToast(`Replaced: ${data.changedWords} words updated across all clips!`, 'success');
+    if (editingClipIndex >= 0) {
+      loadCaptionsForEditor(editingClipIndex);
+    }
+  } catch (err) {
+    showToast(`Replace error: ${err.message}`, 'error');
+  }
+});
+
+// Apply & Fast Re-Render Button (Step 4)
 document.getElementById('editor-rerender-btn')?.addEventListener('click', async () => {
   if (editingClipIndex >= 0 && currentClipData) {
-    els.editorSaveBtn.click();
-    showToast(`Re-rendering Clip ${editingClipIndex + 1}...`, 'info');
+    const btn = document.getElementById('editor-rerender-btn');
+    const origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳ Re-rendering...</span>';
+
     try {
-      const clipData = allClips[editingClipIndex];
-      const res = await fetch('/api/re-render', {
+      await saveEditorCaptions();
+
+      if (!currentJobId) {
+        // Fallback to legacy re-render if not part of a job
+        const clipData = allClips[editingClipIndex];
+        const res = await fetch('/api/re-render', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clipIndex: editingClipIndex, clipData }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Re-render failed');
+        showToast('Re-rendering queued!', 'success');
+        return;
+      }
+
+      const clipNum = editingClipIndex + 1;
+      const res = await fetch(`/api/clips/${currentJobId}/${clipNum}/rerender`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clipIndex: editingClipIndex, clipData }),
       });
+
+      if (res.status === 409) {
+        showToast('Re-render already in progress for this clip', 'warning');
+        return;
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Re-render failed');
-      showToast('Re-rendering queued!', 'success');
+
+      showToast(`Clip ${clipNum} re-rendered successfully!`, 'success');
+      if (data.fileUrl && els.editorVideo) {
+        els.editorVideo.src = `${data.fileUrl}&t=${Date.now()}`;
+        els.editorVideo.load();
+        els.editorVideo.play().catch(() => {});
+      }
+
+      // Update card in results list
+      const resultCard = els.resultsList?.querySelector(`[data-result-index="${editingClipIndex}"]`);
+      if (resultCard && data.fileUrl) {
+        const vid = resultCard.querySelector('video');
+        if (vid) vid.src = `${data.fileUrl}&t=${Date.now()}`;
+      }
     } catch (e) {
       showToast(e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
     }
+  }
+});
+
+// Sane Keyboard Shortcuts (Esc closes with dirty check, Ctrl+S saves)
+window.addEventListener('keydown', (e) => {
+  if (!els.editorModal?.classList.contains('visible')) return;
+  if (e.key === 'Escape') {
+    requestCloseEditor();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    els.editorSaveBtn.click();
   }
 });
 

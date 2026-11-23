@@ -139,9 +139,31 @@ export async function renderClips(sourceFile, selected, subtitleStyle, outputDir
 
     // Generate subtitle files synchronously with clip-specific preset support
     const words = chunk.chunk?.words || chunk.words || [];
-    const clipStyle = chunk.custom?.captionPreset || chunk.custom?.subtitleStyle || subtitleStyle || "bold";
+    const clipStyle = chunk.custom?.captionPreset || chunk.custom?.subtitleStyle || subtitleStyle || "hormozi";
     fs.writeFileSync(srtPath, generateSRT(words, clipStyle, chunkStart));
     fs.writeFileSync(assPath, generateASS(words, clipStyle, chunkStart, chunk.custom || {}));
+
+    // Step 4 Storage: output/<jobId>/clip_<n>.captions.json
+    const shiftedWords = words.map(w => ({
+      word: (w.word || w.text || '').trim(),
+      start: Math.max(0, (Number(w.start) || 0) - chunkStart),
+      end: Math.max(0, (Number(w.end) || 0) - chunkStart),
+    }));
+    const captionsData = {
+      words: shiftedWords,
+      preset: clipStyle,
+      overrides: {
+        fontSize: Number(chunk.custom?.fontSize) || 85,
+        position: Number(chunk.custom?.marginV ?? chunk.custom?.bottomMargin) || 380,
+        colour: chunk.custom?.textColor || '#FFFFFF',
+        uppercase: chunk.custom?.textCase === 'uppercase' || chunk.custom?.uppercase !== false,
+      },
+      language: chunk.language || 'en',
+      version: 1,
+    };
+    try {
+      fs.writeFileSync(path.join(outputDir, `clip_${i + 1}.captions.json`), JSON.stringify(captionsData, null, 2), 'utf8');
+    } catch {}
 
     const actualStart = Number(chunk.custom?.editStart ?? chunk.chunk?.start ?? chunk.start ?? 0);
     const actualEnd = Number(chunk.custom?.editEnd ?? chunk.chunk?.end ?? chunk.end ?? 0);

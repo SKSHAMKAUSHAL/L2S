@@ -26,6 +26,9 @@ import { publishClips, getYouTubeQuotaStatus } from './uploader.js';
 import { aiRegistry } from './ai/registry.js';
 import { CAPTION_PRESETS } from './captions/presets.js';
 import { fetchVideoInfoAsync } from './downloader.js';
+import { generateASS } from './subtitles.js';
+import { FONTS_DIR } from './captions/fonts.js';
+import { spawnTracked } from './process_manager.js';
 import { jobCoordinator, sanitizeClientError } from './pipeline_job.js';
 import {
   SOURCE_QUALITY_PROFILES,
@@ -88,9 +91,10 @@ const firebaseInitialized = initializeFirebase();
 if (firebaseInitialized) {
   console.log('[Server] ✅ Cloud storage enabled');
   // Start cleanup task (every 30 minutes)
-  setInterval(() => {
+  const fbTimer = setInterval(() => {
     cleanupExpiredClips(60).catch(err => console.warn('[Firebase] Cleanup error:', err.message));
   }, 30 * 60 * 1000);
+  fbTimer.unref();
 } else {
   console.log('[Server] ⚠️  Cloud storage disabled - using local storage');
 }
@@ -101,9 +105,10 @@ const cacheManager = new CacheManager(cacheDir);
 console.log('[Server] ✅ Cache manager initialized');
 
 // Periodic cache cleanup (every hour)
-setInterval(() => {
+const cacheCleanupTimer = setInterval(() => {
   cacheManager.clearExpired();
 }, 60 * 60 * 1000);
+cacheCleanupTimer.unref();
 
 // ✅ NEW: Initialize Parallel Processor
 const parallelProcessor = new ParallelProcessor();
@@ -750,6 +755,7 @@ app.post('/api/render', async (req, res) => {
       type: 'render_done',
       files: renderedFiles,
       outputDir: `/output/${videoName}`,
+      jobId: videoName,
       cloudEnabled: !!firebaseInitialized,
     });
 
@@ -862,6 +868,284 @@ app.post('/api/re-render', async (req, res) => {
   } catch (err) {
     broadcast({ type: 'error', msg: `Re-render failed: ${err.message}` });
   }
+});
+
+// ─── Step 4: Caption Editor API ──────────────────────
+const activeRerenders = new Set();
+
+/**
+ * GET /api/clips/:jobId/:clipIndex/captions
+ */
+app.get('/api/clips/:jobId/:clipIndex/captions', (req, res) => {
+  const { jobId, clipIndex } = req.params;
+
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(jobId)) {
+    return res.status(400).json({ error: 'Invalid jobId parameter' });
+  }
+  if (!/^[0-9]{1,3}$/.test(clipIndex)) {
+    return res.status(400).json({ error: 'Invalid clipIndex parameter' });
+  }
+
+  const outputBase = path.resolve(rootDir, 'output');
+  const targetDir = path.resolve(outputBase, jobId);
+  const idx = parseInt(clipIndex, 10);
+  const jsonPath = path.resolve(targetDir, `clip_${idx}.captions.json`);
+
+  if (!jsonPath.startsWith(outputBase)) {
+    return res.status(400).json({ error: 'Access denied: Path traversal detected' });
+  }
+
+  if (!fs.existsSync(jsonPath)) {
+    return res.status(404).json({ error: 'Captions not found for this clip' });
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to read caption file' });
+  }
+});
+
+/**
+ * PUT /api/clips/:jobId/:clipIndex/captions
+ */
+app.put('/api/clips/:jobId/:clipIndex/captions', (req, res) => {
+  const { jobId, clipIndex } = req.params;
+
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(jobId)) {
+    return res.status(400).json({ error: 'Invalid jobId parameter' });
+  }
+  if (!/^[0-9]{1,3}$/.test(clipIndex)) {
+    return res.status(400).json({ error: 'Invalid clipIndex parameter' });
+  }
+
+  const outputBase = path.resolve(rootDir, 'output');
+  const targetDir = path.resolve(outputBase, jobId);
+  const idx = parseInt(clipIndex, 10);
+  const jsonPath = path.resolve(targetDir, `clip_${idx}.captions.json`);
+
+  if (!jsonPath.startsWith(outputBase)) {
+    return res.status(400).json({ error: 'Access denied: Path traversal detected' });
+  }
+
+  const { words, preset, overrides } = req.body;
+  if (!Array.isArray(words)) {
+    return res.status(400).json({ error: 'words must be an array' });
+  }
+  if (words.length > 5000) {
+    return res.status(400).json({ error: 'Too many words (max 5000)' });
+  }
+
+  // Interpolate missing timestamps & validate
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (!w || typeof w.word !== 'string') {
+      return res.status(400).json({ error: `Invalid word at index ${i}` });
+    }
+    if (w.word.length > 40) {
+      return res.status(400).json({ error: `Word "${w.word.slice(0, 10)}..." exceeds 40 characters limit` });
+    }
+
+    // Interpolate missing timestamps between neighbors
+    if (typeof w.start !== 'number' || typeof w.end !== 'number') {
+      const prevEnd = i > 0 && typeof words[i - 1].end === 'number' ? words[i - 1].end : 0;
+      let nextStart = 60;
+      for (let j = i + 1; j < words.length; j++) {
+        if (typeof words[j]?.start === 'number') {
+          nextStart = words[j].start;
+          break;
+        }
+      }
+      w.start = prevEnd;
+      w.end = Math.min(nextStart, prevEnd + 0.3);
+    }
+
+    if (isNaN(w.start) || isNaN(w.end) || w.start < 0 || w.start > w.end) {
+      return res.status(400).json({ error: `Invalid timestamps for word "${w.word}" (start <= end required)` });
+    }
+
+    if (i > 0 && w.start < words[i - 1].start) {
+      return res.status(400).json({ error: `Non-decreasing timestamps required at word "${w.word}"` });
+    }
+  }
+
+  let existing = {};
+  if (fs.existsSync(jsonPath)) {
+    try { existing = JSON.parse(fs.readFileSync(jsonPath, 'utf8')); } catch {}
+  }
+
+  const updatedData = {
+    words,
+    preset: preset || existing.preset || 'hormozi',
+    overrides: overrides || existing.overrides || {},
+    language: existing.language || 'en',
+    version: (existing.version || 1) + 1,
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(jsonPath, JSON.stringify(updatedData, null, 2), 'utf8');
+    res.json({ success: true, captions: updatedData });
+  } catch (err) {
+    res.status(500).json({ error: `Failed to save captions: ${err.message}` });
+  }
+});
+
+/**
+ * POST /api/clips/:jobId/:clipIndex/rerender
+ */
+app.post('/api/clips/:jobId/:clipIndex/rerender', async (req, res) => {
+  const { jobId, clipIndex } = req.params;
+
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(jobId)) {
+    return res.status(400).json({ error: 'Invalid jobId parameter' });
+  }
+  if (!/^[0-9]{1,3}$/.test(clipIndex)) {
+    return res.status(400).json({ error: 'Invalid clipIndex parameter' });
+  }
+
+  const outputBase = path.resolve(rootDir, 'output');
+  const targetDir = path.resolve(outputBase, jobId);
+  const idx = parseInt(clipIndex, 10);
+  const jsonPath = path.resolve(targetDir, `clip_${idx}.captions.json`);
+
+  if (!jsonPath.startsWith(outputBase)) {
+    return res.status(400).json({ error: 'Access denied: Path traversal detected' });
+  }
+
+  const renderKey = `${jobId}:${idx}`;
+  if (activeRerenders.has(renderKey)) {
+    return res.status(409).json({ error: 'Re-render already in progress for this clip' });
+  }
+
+  activeRerenders.add(renderKey);
+
+  try {
+    const padNum = String(idx).padStart(2, '0');
+    const clipsDir = path.join(targetDir, 'clips');
+    let clipVideoPath = path.join(clipsDir, `clip-${padNum}.mp4`);
+
+    if (!fs.existsSync(clipVideoPath)) {
+      const altPath = path.join(clipsDir, `clip_${idx}.mp4`);
+      if (fs.existsSync(altPath)) {
+        clipVideoPath = altPath;
+      } else {
+        return res.status(404).json({ error: `Source clip video not found for clip ${idx}` });
+      }
+    }
+
+    let captions = { words: [], preset: 'hormozi', overrides: {} };
+    if (fs.existsSync(jsonPath)) {
+      try { captions = JSON.parse(fs.readFileSync(jsonPath, 'utf8')); } catch {}
+    }
+
+    const assContent = generateASS(captions.words, captions.preset, 0, captions.overrides);
+    const captionsDir = path.join(targetDir, 'captions');
+    fs.mkdirSync(captionsDir, { recursive: true });
+    const assPath = path.join(captionsDir, `clip-${padNum}.ass`);
+    fs.writeFileSync(assPath, assContent, 'utf8');
+
+    const escapeFFmpegPath = (p) => p.replace(/\\/g, '/').replace(/:/g, '\\:');
+    const escapedAss = escapeFFmpegPath(assPath);
+    const escapedFonts = escapeFFmpegPath(FONTS_DIR);
+    const subFilter = `subtitles=filename='${escapedAss}':fontsdir='${escapedFonts}'`;
+
+    const tempOut = path.join(clipsDir, `rerender_tmp_${Date.now()}_clip-${padNum}.mp4`);
+
+    await new Promise((resolve, reject) => {
+      const child = spawnTracked('ffmpeg', [
+        '-i', clipVideoPath,
+        '-vf', subFilter,
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '18',
+        '-c:a', 'copy',
+        '-y',
+        tempOut,
+      ]);
+
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`FFmpeg exited with code ${code}`));
+      });
+      child.on('error', reject);
+    });
+
+    fs.renameSync(tempOut, clipVideoPath);
+
+    const fileUrl = `/output/${jobId}/clips/${path.basename(clipVideoPath)}?v=${Date.now()}`;
+    res.json({ success: true, fileUrl });
+  } catch (err) {
+    res.status(500).json({ error: `Re-render failed: ${err.message}` });
+  } finally {
+    activeRerenders.delete(renderKey);
+  }
+});
+
+/**
+ * POST /api/clips/:jobId/captions/replace
+ */
+app.post('/api/clips/:jobId/captions/replace', (req, res) => {
+  const { jobId } = req.params;
+  const { find, replace, caseSensitive = false } = req.body;
+
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(jobId)) {
+    return res.status(400).json({ error: 'Invalid jobId parameter' });
+  }
+  if (!find || typeof find !== 'string' || typeof replace !== 'string') {
+    return res.status(400).json({ error: 'find and replace strings required' });
+  }
+
+  const outputBase = path.resolve(rootDir, 'output');
+  const targetDir = path.resolve(outputBase, jobId);
+
+  if (!targetDir.startsWith(outputBase)) {
+    return res.status(400).json({ error: 'Access denied: Path traversal detected' });
+  }
+
+  if (!fs.existsSync(targetDir)) {
+    return res.status(404).json({ error: 'Job directory not found' });
+  }
+
+  let totalChanged = 0;
+  const files = fs.readdirSync(targetDir).filter(f => f.startsWith('clip_') && f.endsWith('.captions.json'));
+
+  for (const f of files) {
+    const filePath = path.join(targetDir, f);
+    try {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (Array.isArray(data.words)) {
+        let fileChanged = 0;
+        for (const w of data.words) {
+          if (!w || !w.word) continue;
+          if (caseSensitive) {
+            if (w.word.includes(find)) {
+              w.word = w.word.replaceAll(find, replace);
+              fileChanged++;
+              totalChanged++;
+            }
+          } else {
+            const regex = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+            if (regex.test(w.word)) {
+              w.word = w.word.replace(regex, replace);
+              fileChanged++;
+              totalChanged++;
+            }
+          }
+        }
+
+        if (fileChanged > 0) {
+          data.version = (data.version || 1) + 1;
+          data.updatedAt = new Date().toISOString();
+          fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+        }
+      }
+    } catch {}
+  }
+
+  res.json({ success: true, changedWords: totalChanged });
 });
 
 /**
@@ -1270,39 +1554,52 @@ app.get('/dashboard', (req, res) => {
   res.redirect(301, '/');
 });
 
-// ─── Start Server ────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-const server = app.listen(PORT, () => {
-  console.log(`\n  🛹 L2S is running on http://localhost:${PORT}\n`);
-  console.log(`  Turn long-form videos into viral shorts — 100% local, 100% free\n`);
-});
+export function createApp() {
+  return app;
+}
+export { app };
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`\n❌ Startup Error: Port ${PORT} is already in use by another process.`);
-    console.error(`   To resolve without killing other processes, set PORT=<port> in .env or run:`);
-    console.error(`   $env:PORT=3001; npm run dev (PowerShell) or PORT=3001 npm run dev\n`);
+// ─── Start Server (Direct Run Only) ───────────────────
+const isDirectRun = Boolean(
+  process.argv[1] &&
+  (path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) ||
+   process.argv[1].endsWith('server.js'))
+);
+
+if (isDirectRun) {
+  const PORT = process.env.PORT || 3000;
+  const server = app.listen(PORT, () => {
+    console.log(`\n  🛹 L2S is running on http://localhost:${PORT}\n`);
+    console.log(`  Turn long-form videos into viral shorts — 100% local, 100% free\n`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n❌ Startup Error: Port ${PORT} is already in use by another process.`);
+      console.error(`   To resolve without killing other processes, set PORT=<port> in .env or run:`);
+      console.error(`   $env:PORT=3001; npm run dev (PowerShell) or PORT=3001 npm run dev\n`);
+      process.exit(1);
+    }
+    console.error('Server startup error:', err);
     process.exit(1);
-  }
-  console.error('Server startup error:', err);
-  process.exit(1);
-});
+  });
 
-const wss = new WebSocketServer({ server, path: '/ws' });
-wss.on('connection', (ws) => {
-  clients.add(ws);
-  ws.on('close', () => clients.delete(ws));
-});
+  const wss = new WebSocketServer({ server, path: '/ws' });
+  wss.on('connection', (ws) => {
+    clients.add(ws);
+    ws.on('close', () => clients.delete(ws));
+  });
 
-// ─── Graceful Shutdown ───────────────────────────────
-process.on('SIGINT', () => {
-  console.log('\n🛑 Shutting down server (SIGINT)...');
-  stopPipeline();
-  server.close(() => process.exit(0));
-});
+  // ─── Graceful Shutdown ───────────────────────────────
+  process.on('SIGINT', () => {
+    console.log('\n🛑 Shutting down server (SIGINT)...');
+    stopPipeline();
+    server.close(() => process.exit(0));
+  });
 
-process.on('SIGTERM', () => {
-  console.log('\n🛑 Shutting down server (SIGTERM)...');
-  stopPipeline();
-  server.close(() => process.exit(0));
-});
+  process.on('SIGTERM', () => {
+    console.log('\n🛑 Shutting down server (SIGTERM)...');
+    stopPipeline();
+    server.close(() => process.exit(0));
+  });
+}

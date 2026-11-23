@@ -822,6 +822,39 @@
               </div>
             </div>
 
+            <!-- Section 1B: Word-by-Word Caption Editor (Step 4) -->
+            <div class="studio-control-card" id="editor-word-by-word-card">
+              <div class="studio-card-header">
+                <div class="studio-header-title">📝 Word-by-Word Caption Editor</div>
+                <span id="editor-words-count" style="font-size:0.75rem;color:var(--text-muted)">0 words</span>
+              </div>
+
+              <!-- Find & Replace across all clips -->
+              <div class="caption-find-replace-box" style="margin-top:8px;margin-bottom:12px;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08)">
+                <div style="font-size:0.75rem;font-weight:600;margin-bottom:6px;color:var(--accent-cyan);display:flex;align-items:center;gap:6px">
+                  <span>🔍 Find and Replace in All Clips</span>
+                </div>
+                <div style="display:flex;gap:6px;margin-bottom:6px;">
+                  <input type="text" id="editor-find-input" placeholder="Find text..." style="flex:1;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);color:#fff;border-radius:4px;padding:4px 8px;font-size:0.78rem;" />
+                  <input type="text" id="editor-replace-input" placeholder="Replace with..." style="flex:1;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);color:#fff;border-radius:4px;padding:4px 8px;font-size:0.78rem;" />
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <label style="font-size:0.72rem;display:flex;align-items:center;gap:4px;color:var(--text-muted);cursor:pointer">
+                    <input type="checkbox" id="editor-replace-case-sensitive" /> Match case
+                  </label>
+                  <button type="button" class="btn-secondary btn-sm" id="btn-editor-replace-all" style="padding:3px 10px;font-size:0.74rem;">Replace in All Clips</button>
+                </div>
+              </div>
+
+              <!-- Words List container in time order -->
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                <span style="font-size:0.75rem;color:var(--text-secondary);font-weight:600">Caption Lines (click to seek):</span>
+              </div>
+              <div id="editor-caption-rows-list" class="editor-caption-rows-container" style="max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:5px;padding-right:4px;">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+
             <!-- Section 2: Timing & Trimming -->
             <div class="studio-control-card">
               <div class="studio-card-header">
