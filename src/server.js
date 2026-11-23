@@ -394,7 +394,7 @@ app.post('/api/process', async (req, res) => {
     return res.status(409).json({ error: 'Pipeline already running. Stop it first.' });
   }
 
-  const { source, genre, description, timestamps, clipMode, clipCount, defaultRatio, defaultZoom, videoQuality, exportQuality, sessionId } = req.body;
+  const { source, genre, language = 'auto', description, timestamps, clipMode, clipCount, defaultRatio, defaultZoom, videoQuality, exportQuality, sessionId } = req.body;
   if (!source || typeof source !== 'string') return res.status(400).json({ error: 'Source URL is required' });
 
   const cleanSource = source.trim();
@@ -513,6 +513,7 @@ app.post('/api/process', async (req, res) => {
   }
 
     await runPipeline(source, genre, broadcast, rootDir, {
+      language,
       description,
       timestamps,
       clipMode,

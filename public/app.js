@@ -12,6 +12,7 @@ const els = {
   form: $('#process-form'),
   sourceInput: $('#source-input'),
   genreSelect: $('#genre-select'),
+  languageSelect: $('#language-select'),
   generateBtn: $('#generate-btn') || $('#process-btn'),
   stopBtn: $('#stop-btn'),
   inputHint: $('#input-hint'),
@@ -614,6 +615,7 @@ generateBtnTarget?.addEventListener('click', async (e) => {
   
   const source = els.sourceInput.value.trim();
   const genre = els.genreSelect.value;
+  const language = els.languageSelect ? els.languageSelect.value : 'auto';
 
   if (!source) return;
 
@@ -660,7 +662,7 @@ generateBtnTarget?.addEventListener('click', async (e) => {
     const res = await fetch('/api/process', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, genre, timestamps, clipMode, clipCount, defaultRatio, defaultZoom, videoQuality, exportQuality, sessionId: currentSessionId }),
+      body: JSON.stringify({ source, genre, language, timestamps, clipMode, clipCount, defaultRatio, defaultZoom, videoQuality, exportQuality, sessionId: currentSessionId }),
     });
 
     const data = await res.json();

@@ -217,7 +217,7 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
   const pipeline = { stopped: false, videoPath: null, selected: null, clipsWithMeta: null, transcript: null };
   currentPipeline = pipeline;
 
-  const { description, timestamps, clipMode, clipCount, defaultRatio = '9:16', defaultZoom = 1.0, videoQuality = 'high', exportQuality = 'balanced' } = options;
+  const { language = 'auto', description, timestamps, clipMode, clipCount, defaultRatio = '9:16', defaultZoom = 1.0, videoQuality = 'high', exportQuality = 'balanced' } = options;
   const hasTimestamps = timestamps && timestamps.length > 0;
   const onlyManual = clipMode === 'only';
 
@@ -307,7 +307,12 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
 
     let transcript;
     try {
-      transcript = await transcribeAudio(audioPath, config.cacheDir, 'tiny.en', (progressMsg) => {
+      transcript = await transcribeAudio(audioPath, config.cacheDir, {
+        language,
+        title: videoInfo?.title || '',
+        description: videoInfo?.description || description || '',
+        channel: videoInfo?.channel || '',
+      }, (progressMsg) => {
         broadcast({ type: 'log', level: 'info', msg: `    ${progressMsg}` });
       });
     } catch (e) {
