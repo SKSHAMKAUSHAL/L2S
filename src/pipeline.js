@@ -4,6 +4,7 @@
 
 import { downloadVideo, extractAudio } from './downloader.js';
 import { transcribeAudio } from './transcriber.js';
+import { cleanTranscript } from './transcript/clean.js';
 import { selectClips } from './clip_selector.js';
 import path from 'path';
 import fs from 'fs';
@@ -323,6 +324,23 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
         step: 'transcribe',
       });
       throw new Error('PIPELINE_CANCELLED');
+    }
+
+    // Clean and normalize transcript (Hinglish/Hindi transliteration & glossary cleanup)
+    try {
+      transcript = await cleanTranscript(transcript, {
+        language,
+        glossary: options.glossary || [],
+      });
+      if (transcript.meta?.cleanup && !transcript.meta.cleanup.skipped && transcript.meta.cleanup.changedWords > 0) {
+        broadcast({
+          type: 'log',
+          level: 'info',
+          msg: `✨ Transcript cleaned: ${transcript.meta.cleanup.changedWords} words normalized`,
+        });
+      }
+    } catch (cleanupErr) {
+      console.warn('[pipeline] Transcript cleanup error (continuing with original transcript):', cleanupErr.message);
     }
 
     pipeline.transcript = transcript;
