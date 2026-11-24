@@ -7,6 +7,8 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/server.js';
+import { getDb, createDbRepository } from '../src/db/index.js';
+import { generateTokens } from '../src/auth/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -72,6 +74,18 @@ test('Clip Re-render API and Concurrency Guard (Step 4)', async (t) => {
   const port = server.address().port;
   const baseUrl = `http://127.0.0.1:${port}`;
 
+  const repo = createDbRepository(getDb());
+  let user = repo.getUserByEmail('rerender_test@example.com');
+  if (!user) user = repo.createUser({ email: 'rerender_test@example.com', passwordHash: 'dummyhash1234567890' });
+  const existingJob = repo.getJob(testJobId, user.id);
+  if (!existingJob) repo.createJob({ id: testJobId, userId: user.id });
+  const { sessionToken, csrfToken } = generateTokens();
+  repo.createSession({ userId: user.id, rawToken: sessionToken, csrfToken, expiresAt: new Date(Date.now() + 86400000) });
+  const authHeaders = {
+    'Cookie': `l2s_session=${sessionToken}`,
+    'X-CSRF-Token': csrfToken,
+  };
+
   t.after(() => {
     server.close();
     try {
@@ -82,7 +96,7 @@ test('Clip Re-render API and Concurrency Guard (Step 4)', async (t) => {
   await t.test('POST /api/clips/:jobId/:clipIndex/rerender burns new captions and updates file', async () => {
     const res = await fetch(`${baseUrl}/api/clips/${testJobId}/1/rerender`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
     });
 
     assert.equal(res.status, 200);
@@ -110,8 +124,8 @@ test('Clip Re-render API and Concurrency Guard (Step 4)', async (t) => {
   await t.test('Concurrent rerender returns 409', async () => {
     // Fire two requests concurrently
     const [req1, req2] = await Promise.all([
-      fetch(`${baseUrl}/api/clips/${testJobId}/1/rerender`, { method: 'POST' }),
-      fetch(`${baseUrl}/api/clips/${testJobId}/1/rerender`, { method: 'POST' }),
+      fetch(`${baseUrl}/api/clips/${testJobId}/1/rerender`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders } }),
+      fetch(`${baseUrl}/api/clips/${testJobId}/1/rerender`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders } }),
     ]);
 
     const statuses = [req1.status, req2.status];

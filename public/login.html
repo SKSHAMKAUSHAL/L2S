@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In — L2S</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: var(--bg-main, #0f1117);
+      color: var(--text-main, #f0f2f5);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+    }
+    .auth-card {
+      background: var(--bg-card, #1a1d27);
+      border: 1px solid var(--border, rgba(255,255,255,0.1));
+      border-radius: 16px;
+      padding: 36px 32px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.4);
+    }
+    .auth-brand {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .auth-title {
+      font-size: 1.5rem;
+      font-weight: 800;
+      margin: 12px 0 6px 0;
+      letter-spacing: -0.5px;
+    }
+    .auth-subtitle {
+      font-size: 0.85rem;
+      color: var(--text-muted, #8b949e);
+      margin: 0;
+    }
+    .auth-tabs {
+      display: flex;
+      gap: 6px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 10px;
+      padding: 4px;
+      margin-bottom: 24px;
+    }
+    .auth-tab {
+      flex: 1;
+      padding: 8px 12px;
+      border: none;
+      background: none;
+      color: var(--text-muted, #8b949e);
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      border-radius: 8px;
+      transition: all 0.2s ease;
+    }
+    .auth-tab.active {
+      background: var(--accent-purple, #7c3aed);
+      color: white;
+    }
+    .form-group {
+      margin-bottom: 18px;
+    }
+    .form-label {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted, #8b949e);
+      margin-bottom: 8px;
+    }
+    .form-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 12px 14px;
+      background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border, rgba(255,255,255,0.12));
+      border-radius: 10px;
+      color: white;
+      font-size: 0.92rem;
+      outline: none;
+      transition: border-color 0.2s ease;
+    }
+    .form-input:focus {
+      border-color: var(--accent-purple, #7c3aed);
+    }
+    .btn-submit {
+      width: 100%;
+      padding: 13px;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      color: white;
+      font-size: 0.95rem;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: opacity 0.2s ease;
+    }
+    .btn-submit:hover {
+      opacity: 0.92;
+    }
+    .auth-error {
+      display: none;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #f87171;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 0.84rem;
+      margin-bottom: 18px;
+    }
+  </style>
+</head>
+<body>
+  <div class="auth-card">
+    <div class="auth-brand">
+      <div style="font-size:2.4rem">🎬</div>
+      <h1 class="auth-title">Welcome to L2S</h1>
+      <p class="auth-subtitle">AI-powered viral clip generator & publisher</p>
+    </div>
+
+    <div class="auth-tabs">
+      <button type="button" class="auth-tab active" id="tab-login">Sign In</button>
+      <button type="button" class="auth-tab" id="tab-register">Create Account</button>
+    </div>
+
+    <div class="auth-error" id="auth-error"></div>
+
+    <form id="auth-form">
+      <div class="form-group">
+        <label class="form-label" for="auth-email">Email Address</label>
+        <input type="email" id="auth-email" class="form-input" placeholder="you@domain.com" required autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="auth-password">Password</label>
+        <input type="password" id="auth-password" class="form-input" placeholder="••••••••••" required minlength="10" autocomplete="current-password">
+        <span style="font-size:0.74rem;color:var(--text-muted);display:block;margin-top:4px">Minimum 10 characters</span>
+      </div>
+      <button type="submit" class="btn-submit" id="btn-submit">Sign In</button>
+    </form>
+  </div>
+
+  <script>
+    let mode = 'login';
+    const tabLogin = document.getElementById('tab-login');
+    const tabRegister = document.getElementById('tab-register');
+    const authForm = document.getElementById('auth-form');
+    const authEmail = document.getElementById('auth-email');
+    const authPassword = document.getElementById('auth-password');
+    const btnSubmit = document.getElementById('btn-submit');
+    const authError = document.getElementById('auth-error');
+
+    function showError(msg) {
+      authError.textContent = msg;
+      authError.style.display = 'block';
+    }
+    function hideError() {
+      authError.style.display = 'none';
+    }
+
+    tabLogin.addEventListener('click', () => {
+      mode = 'login';
+      tabLogin.classList.add('active');
+      tabRegister.classList.remove('active');
+      btnSubmit.textContent = 'Sign In';
+      authPassword.autocomplete = 'current-password';
+      hideError();
+    });
+
+    tabRegister.addEventListener('click', () => {
+      mode = 'register';
+      tabRegister.classList.add('active');
+      tabLogin.classList.remove('active');
+      btnSubmit.textContent = 'Create Account';
+      authPassword.autocomplete = 'new-password';
+      hideError();
+    });
+
+    authForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideError();
+
+      const email = authEmail.value.trim();
+      const password = authPassword.value;
+
+      if (!email || !password) return;
+
+      btnSubmit.disabled = true;
+      btnSubmit.textContent = 'Processing...';
+
+      const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          showError(data.error || 'Authentication failed');
+          btnSubmit.disabled = false;
+          btnSubmit.textContent = mode === 'register' ? 'Create Account' : 'Sign In';
+          return;
+        }
+
+        // Redirect to main application
+        window.location.href = '/';
+      } catch (err) {
+        showError('Network error: ' + err.message);
+        btnSubmit.disabled = false;
+        btnSubmit.textContent = mode === 'register' ? 'Create Account' : 'Sign In';
+      }
+    });
+  </script>
+</body>
+</html>

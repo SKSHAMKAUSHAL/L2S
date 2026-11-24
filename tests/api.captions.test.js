@@ -5,6 +5,8 @@ import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/server.js';
+import { getDb, createDbRepository } from '../src/db/index.js';
+import { generateTokens } from '../src/auth/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,6 +44,18 @@ test('Caption Editor API Endpoints (Step 4)', async (t) => {
   const port = server.address().port;
   const baseUrl = `http://127.0.0.1:${port}`;
 
+  const repo = createDbRepository(getDb());
+  let user = repo.getUserByEmail('captions_test@example.com');
+  if (!user) user = repo.createUser({ email: 'captions_test@example.com', passwordHash: 'dummyhash1234567890' });
+  const existingJob = repo.getJob(testJobId, user.id);
+  if (!existingJob) repo.createJob({ id: testJobId, userId: user.id });
+  const { sessionToken, csrfToken } = generateTokens();
+  repo.createSession({ userId: user.id, rawToken: sessionToken, csrfToken, expiresAt: new Date(Date.now() + 86400000) });
+  const authHeaders = {
+    'Cookie': `l2s_session=${sessionToken}`,
+    'X-CSRF-Token': csrfToken,
+  };
+
   t.after(() => {
     server.close();
     try {
@@ -50,7 +64,7 @@ test('Caption Editor API Endpoints (Step 4)', async (t) => {
   });
 
   await t.test('GET /api/clips/:jobId/:clipIndex/captions returns saved captions', async () => {
-    const res = await fetch(`${baseUrl}/api/clips/${testJobId}/1/captions`);
+    const res = await fetch(`${baseUrl}/api/clips/${testJobId}/1/captions`, { headers: authHeaders });
     assert.equal(res.status, 200);
     const data = await res.json();
     assert.equal(data.version, 1);
@@ -59,27 +73,27 @@ test('Caption Editor API Endpoints (Step 4)', async (t) => {
   });
 
   await t.test('GET non-existent clip captions returns 404', async () => {
-    const res = await fetch(`${baseUrl}/api/clips/${testJobId}/99/captions`);
+    const res = await fetch(`${baseUrl}/api/clips/${testJobId}/99/captions`, { headers: authHeaders });
     assert.equal(res.status, 404);
   });
 
   await t.test('Path traversal attempts are rejected with 400 or 404', async () => {
     // Attempt with URL encoded ../../.env
-    const res1 = await fetch(`${baseUrl}/api/clips/..%2f..%2f.env/1/captions`);
+    const res1 = await fetch(`${baseUrl}/api/clips/..%2f..%2f.env/1/captions`, { headers: authHeaders });
     assert.ok(res1.status === 400 || res1.status === 404);
 
-    const res2 = await fetch(`${baseUrl}/api/clips/${testJobId}/%2e%2e%2f1/captions`);
+    const res2 = await fetch(`${baseUrl}/api/clips/${testJobId}/%2e%2e%2f1/captions`, { headers: authHeaders });
     assert.ok(res2.status === 400 || res2.status === 404);
 
     const res3 = await fetch(`${baseUrl}/api/clips/testJob/1/captions`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({ words: [] }),
     });
     // Valid regex but not traversal, test actual traversal on PUT:
     const res4 = await fetch(`${baseUrl}/api/clips/..%2f.env/1/captions`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({ words: [] }),
     });
     assert.ok(res4.status === 400 || res4.status === 404);
@@ -93,7 +107,7 @@ test('Caption Editor API Endpoints (Step 4)', async (t) => {
     ];
     const res = await fetch(`${baseUrl}/api/clips/${testJobId}/1/captions`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         words: updatedWords,
         preset: 'neon',
@@ -119,7 +133,7 @@ test('Caption Editor API Endpoints (Step 4)', async (t) => {
     // 1. words not array
     const r1 = await fetch(`${baseUrl}/api/clips/${testJobId}/1/captions`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({ words: 'not-an-array' }),
     });
     assert.equal(r1.status, 400);
@@ -127,7 +141,7 @@ test('Caption Editor API Endpoints (Step 4)', async (t) => {
     // 2. Word over 40 chars
     const r2 = await fetch(`${baseUrl}/api/clips/${testJobId}/1/captions`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         words: [{ word: 'a'.repeat(45), start: 0, end: 1 }],
       }),
@@ -137,7 +151,7 @@ test('Caption Editor API Endpoints (Step 4)', async (t) => {
     // 3. Invalid timestamps (start > end)
     const r3 = await fetch(`${baseUrl}/api/clips/${testJobId}/1/captions`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         words: [{ word: 'test', start: 2.0, end: 1.0 }],
       }),
@@ -147,7 +161,7 @@ test('Caption Editor API Endpoints (Step 4)', async (t) => {
     // 4. Non-decreasing timestamps
     const r4 = await fetch(`${baseUrl}/api/clips/${testJobId}/1/captions`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         words: [
           { word: 'first', start: 2.0, end: 2.5 },
@@ -179,7 +193,7 @@ test('Caption Editor API Endpoints (Step 4)', async (t) => {
 
     const res = await fetch(`${baseUrl}/api/clips/${testJobId}/captions/replace`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({ find: 'everyone', replace: 'folks', caseSensitive: false }),
     });
 

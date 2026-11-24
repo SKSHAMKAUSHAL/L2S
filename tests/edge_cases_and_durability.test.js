@@ -229,11 +229,12 @@ describe('Prompt 8 — Edge Cases, Durability & Release Gate Verification', () =
       );
     });
 
-    it('verifies static routes are strictly scoped to public, output, and temp', () => {
+    it('verifies static routes are strictly scoped to public, and output/temp are protected (Step 7)', () => {
       const serverFile = fs.readFileSync(path.resolve('src/server.js'), 'utf8');
       assert.ok(serverFile.includes("express.static(path.join(rootDir, 'public')"));
-      assert.ok(serverFile.includes("express.static(path.join(rootDir, 'output')"));
-      assert.ok(serverFile.includes("express.static(path.join(rootDir, 'temp')"));
+      // As required by Step 7, output and temp are removed from public express.static
+      assert.ok(!serverFile.includes("app.use('/output', express.static"));
+      assert.ok(!serverFile.includes("app.use('/temp', express.static"));
     });
   });
 });
