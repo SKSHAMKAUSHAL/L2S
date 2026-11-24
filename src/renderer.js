@@ -13,6 +13,7 @@ import { spawnTracked } from "./process_manager.js";
 import { getExportProfile } from "./video/quality_profiles.js";
 import { verifyMediaFile } from "./video/verifier.js";
 import { ensureSufficientDiskSpace } from "./system/disk_guard.js";
+import { renderReframedClip } from "./reframe.js";
 
 const IS_WINDOWS = process.platform === "win32";
 
@@ -280,46 +281,71 @@ async function cutClip(sourceFile, outputPath, start, end, assPath, customData =
   // If captions enabled, render to tempRaw first, otherwise render straight to tempFinal
   const initialOutput = captionsEnabled ? tempRaw : tempFinal;
 
-  try {
-    await runFFmpegAsync([
-      "-ss", String(start),
-      "-i", sourceFile,
-      "-t", String(duration),
-      "-vf", filter,
-      ...encoderArgs,
-      "-c:a", "aac",
-      "-b:a", audioBitrate,
-      "-threads", "0",
-      "-y",
-      initialOutput,
-    ]);
-  } catch (e) {
-    // If GPU encoding fails, retry with CPU fallback
-    if (encoder.codec !== "libx264") {
-      console.warn(`[renderer] GPU encode failed, retrying with CPU: ${e.message.slice(0, 100)}`);
+  const reframeMode = customData.reframeMode;
+  const hasManualPanZoom = (zoom !== 1.0) || (normPanX !== 0.0) || (normPanY !== 0.0);
+  let reframedSuccess = false;
+
+  // Face-following reframing for 9:16 vertical exports unless manual pan/zoom was explicitly specified
+  if (aspectRatio === '9:16' && !hasManualPanZoom && (reframeMode === 'auto' || reframeMode === 'split')) {
+    try {
+      await renderReframedClip(sourceFile, start, end, initialOutput, {
+        reframeMode,
+        encoder: encoder.codec,
+        preset,
+        crf: qualityVal,
+        audioBitrate,
+        videoBitrate: exportProfile.videoBitrate,
+        maxrate: exportProfile.maxrate,
+        bufsize: exportProfile.bufsize,
+      });
+      reframedSuccess = true;
+    } catch (e) {
+      console.warn(`[renderer] Auto-reframe fallback triggered, using center crop: ${e.message}`);
+    }
+  }
+
+  if (!reframedSuccess) {
+    try {
       await runFFmpegAsync([
         "-ss", String(start),
         "-i", sourceFile,
         "-t", String(duration),
         "-vf", filter,
-        "-c:v", "libx264",
-        "-preset", exportProfile.cpuPreset || "medium",
-        "-crf", String(exportProfile.cpuCrf || 22),
-        "-pix_fmt", "yuv420p",
-        "-b:v", exportProfile.videoBitrate || "8M",
-        "-maxrate", exportProfile.maxrate || "14M",
-        "-bufsize", exportProfile.bufsize || "18M",
-        "-movflags", "+faststart",
-        "-vsync", "1",
-        "-async", "1",
+        ...encoderArgs,
         "-c:a", "aac",
         "-b:a", audioBitrate,
         "-threads", "0",
         "-y",
         initialOutput,
       ]);
-    } else {
-      throw e;
+    } catch (e) {
+      // If GPU encoding fails, retry with CPU fallback
+      if (encoder.codec !== "libx264") {
+        console.warn(`[renderer] GPU encode failed, retrying with CPU: ${e.message.slice(0, 100)}`);
+        await runFFmpegAsync([
+          "-ss", String(start),
+          "-i", sourceFile,
+          "-t", String(duration),
+          "-vf", filter,
+          "-c:v", "libx264",
+          "-preset", exportProfile.cpuPreset || "medium",
+          "-crf", String(exportProfile.cpuCrf || 22),
+          "-pix_fmt", "yuv420p",
+          "-b:v", exportProfile.videoBitrate || "8M",
+          "-maxrate", exportProfile.maxrate || "14M",
+          "-bufsize", exportProfile.bufsize || "18M",
+          "-movflags", "+faststart",
+          "-vsync", "1",
+          "-async", "1",
+          "-c:a", "aac",
+          "-b:a", audioBitrate,
+          "-threads", "0",
+          "-y",
+          initialOutput,
+        ]);
+      } else {
+        throw e;
+      }
     }
   }
 

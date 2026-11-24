@@ -148,6 +148,7 @@ let editorReRenderIndex = -1;
 let customOutputDir = '';
 let currentVideoTitle = '';
 let preGenRatio = '9:16';
+let preGenReframeMode = 'auto';
 let preGenZoom = 1.0;
 let clipCount = 'auto';
 let videoQuality = 'best'; // Video download quality profile
@@ -824,6 +825,7 @@ function showReviewSection(clips) {
   clips.forEach((clip, i) => {
     clip.aspectRatio = clip.aspectRatio || preGenRatio;
     clip.zoom = clip.zoom || preGenZoom;
+    clip.reframeMode = clip.reframeMode || preGenReframeMode;
   });
 
   clips.forEach((clip, i) => {
@@ -3270,6 +3272,13 @@ els.btnPublish?.addEventListener('click', async () => {
   const zoomVal = document.getElementById('pre-gen-zoom-val');
   const ratioDisplay = document.getElementById('current-ratio-display');
   const ratioSelect = document.getElementById('pre-gen-ratio-select');
+  const reframeSelect = document.getElementById('pre-gen-reframe-mode');
+
+  if (reframeSelect) {
+    reframeSelect.addEventListener('change', () => {
+      preGenReframeMode = reframeSelect.value || 'auto';
+    });
+  }
 
   // Also support legacy ratio buttons if present
   const ratioBtns = els.preGenRatioBtns;

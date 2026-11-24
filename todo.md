@@ -364,3 +364,57 @@ TESTS: run a fake Google server inside the test (a local http server standing in
 - tests/youtube.quota.test.js: counter shared by users, reset at the Los Angeles midnight (use a fake clock around a daylight-saving change), per-user daily cap.
 
 Definition of done: npm test passes; the end-to-end flow works against the fake Google server; docs/youtube-notes.md and docs/YOUTUBE_COMPLIANCE.md exist. The report must say clearly which parts can only be proven with a real Google account (I will test those by hand).
+Step 10: File upload and YouTube link reliability
+Goal: customers can upload their own video (the reliable, legally safer path), and YouTube links become a clearly labelled best-effort feature.
+Why: YouTube blocks many datacenter IPs, so yt-dlp that works on your laptop often fails on a server, and downloading videos you do not own conflicts with YouTube's Terms. Free workarounds (cookies from a browser, a home PC) are fragile. Do not promise YouTube links to paying customers.
+[paste the shared context block first]
+
+STEP 10 TASK: add video file upload, rights attestation, and honest handling of YouTube link failures. Branch step10-upload (after Steps 7 and 8).
+
+READ FIRST: src/server.js (/api/process), src/downloader.js, src/pipeline.js (where the video path enters the pipeline), the plan limits from Step 7, and public/index.html and app.js (the source input).
+
+REQUIREMENTS
+1. Upload endpoint POST /api/uploads (authenticated, CSRF-protected): stream the file to storage/<userId>/uploads/<uploadId>/source.<ext> using a streaming multipart parser (busboy, pinned) so the file is never held in memory. Limits from env: MAX_UPLOAD_BYTES (default 2 GB for paid, 500 MB for free), allowed extensions mp4, mov, mkv, webm, m4a, mp3, wav. Reject early using the Content-Length header, and also enforce the limit while streaming (abort and delete the partial file).
+2. Validation after upload: run ffprobe (argument array) and require at least one audio stream, a known duration within the plan limit (free 30 min, paid 120 min), and a readable video or audio codec. Reject files whose real content does not match the extension (for example a text file renamed .mp4). Then normalise: remux to mp4 with -c copy when possible, otherwise transcode with -preset veryfast. Strip metadata (-map_metadata -1). Store duration and a sha256 of the file.
+3. Rights attestation: the UI must show a checkbox 'I own this content or have permission to use it' (required for both uploads and links), a link to /terms and /privacy, and the server stores the acceptance (user id, timestamp, IP, source type, source reference, the version of the terms) in a table content_attestations. Reject job creation without it.
+4. Job creation: /api/process accepts either { uploadId } or { youtubeUrl } (never both, validated with Step 8's validator) and builds the job. The pipeline must skip the download step for uploads and use the existing audio extraction.
+5. YouTube links, best effort: label the option 'YouTube link (beta, may fail)'. Map downloader failures to friendly error codes: VIDEO_UNAVAILABLE, AGE_RESTRICTED, PRIVATE, GEO_BLOCKED, BOT_CHECK (the 'confirm you are not a bot' wall), RATE_LIMITED, TOO_LONG, TOO_LARGE, UNKNOWN. For each, show a clear message and, for BOT_CHECK and RATE_LIMITED, tell the user to upload the file instead. Retry transient errors 2 times with backoff, never loop forever. Log the yt-dlp version with every failure. Do not add any cookie support. Write the extra metadata we need for ranking (title, description, channel, heatmap if present) into the job.
+6. Retention: a cleanup job (BullMQ repeatable job, or setInterval in dev) that deletes source videos older than SOURCE_RETENTION_DAYS (default 3) and rendered clips older than CLIP_RETENTION_DAYS (default 14), and orphaned partial uploads older than 1 hour. Put the retention days in the UI near the upload box.
+7. Takedown path: a public page /takedown with a simple form (email, URL of content, message) that stores a row in a table takedown_requests and a documented admin command scripts/takedown.js <jobId> that disables and deletes the job's files.
+
+TESTS:
+- tests/upload.test.js: a valid small mp4 (generate with ffmpeg) is accepted and listed; a text file renamed .mp4 is rejected; a file over the limit is aborted mid-stream and nothing is left on disk; a file without audio is rejected; duration limit by plan; unauthenticated upload gets 401; user B cannot use user A's uploadId; the attestation is required and stored.
+- tests/downloader.errors.test.js: put a fake 'yt-dlp' script first on PATH that prints known error texts (bot check, private video, 403, etc.) and assert each maps to the right error code and that transient errors retry the right number of times.
+- tests/retention.test.js: with a fake clock and fake files, old sources and clips are deleted and young ones are kept.
+- tests/takedown.test.js: the form validates input and stores a row; the admin script deletes the files.
+
+Definition of done: npm test passes; you uploaded a real 2-minute video through the running server with curl and a clip set came out; report the error-code mapping table.
+Step 11: Deploy, storage, payments and final QA
+Goal: the product runs on one cheap CPU server, takes payment in INR, survives failures, and has been tested end to end in English, Hindi and Hinglish.
+Cheap setup: one CPU VPS (4+ cores, for example Hetzner, roughly 10-20 euros a month; check current prices), Caddy for automatic HTTPS, Redis in a container, SQLite on a volume with nightly backups, Cloudflare R2 for finished clips (no egress fees; check the current free tier), Sentry's free tier for errors, Razorpay for Indian payments. Price from your measured cost per processed minute, not a guess.
+[paste the shared context block first]
+
+STEP 11 TASK: production packaging, storage, payments, observability, and the final QA pass. Branch step11-launch (after Steps 7-10). Split into 11a to 11d and report after each.
+
+11a DOCKER AND SERVER
+1. Dockerfile (multi-stage, node:20-bookworm-slim): install ffmpeg, python3, pip packages from scripts/requirements.txt, and yt-dlp at a PINNED version (ARG YTDLP_VERSION). Run as a non-root user. docker-compose.yml with services app, worker, redis, caddy. Per service: restart unless-stopped, healthcheck, cpus and mem_limit (worker 3 CPUs and 5 GB, app 1 CPU and 1 GB), read_only root filesystem where possible with tmpfs for /tmp, security_opt no-new-privileges, cap_drop ALL, and no published ports except Caddy's 80 and 443. Redis not exposed. Caddyfile with automatic HTTPS for DOMAIN, gzip, a request body limit matching MAX_UPLOAD_BYTES, and long timeouts for uploads.
+2. Health: GET /healthz (process up) and GET /readyz (DB, Redis and ffmpeg reachable). Graceful shutdown: on SIGTERM stop taking jobs, let running jobs finish up to 60 s, then requeue.
+3. Backups: scripts/backup.sh uses 'sqlite3 .backup' then uploads to R2 (rclone or aws cli S3 API), keeps 14 days, plus scripts/restore.md with the exact restore steps. TEST the restore on a scratch copy and paste the result.
+4. docs/DEPLOY.md: from a blank Ubuntu server to a running site, in numbered copy-paste commands (firewall with only 22, 80, 443; SSH keys only; unattended upgrades; docker install; clone; .env with chmod 600; compose up). Also include how to update yt-dlp (rebuild image with a new version) and how to roll back.
+
+11b STORAGE
+5. Add an S3-compatible storage adapter (src/storage/) with two drivers: local disk and Cloudflare R2 (@aws-sdk/client-s3, pinned). Rendered clips go to R2 when STORAGE_DRIVER=r2 and are served by short-lived signed URLs (15 minutes) after an ownership check. Add a lifecycle note for deleting objects after CLIP_RETENTION_DAYS. Tests use a fake S3 (an in-process server or a mock) and assert that signed URLs expire and cannot be used for another user's file.
+
+11c PAYMENTS (Razorpay)
+6. Plans in a config file: Free (watermark, 720p, 30 source minutes per month), and paid credit packs measured in source minutes. Write scripts/measure_cost.js that processes 10 sample videos and prints average Groq cost, CPU seconds and storage per source minute; I will use the numbers to set prices. Do not invent prices.
+7. Razorpay Orders API: POST /api/billing/order creates an order for a pack, the browser pays with Razorpay Checkout, and the server verifies the payment signature (HMAC SHA256 of order_id|payment_id with the key secret, compared with timingSafeEqual) before adding credits. Also a webhook endpoint with raw-body signature verification and idempotency (store the event id; a repeated event adds nothing). A credits ledger table (user, delta seconds, reason, reference, created_at); credits are spent when a job finishes, by actual processed minutes, and refunded automatically for failed jobs. Watermark: free plan renders get a small logo burned in through ffmpeg. Keep keys in env and never in the browser except the public key id.
+8. Pages: /pricing, /billing (balance and history), refund policy page (template, marked 'review with a lawyer'), and account deletion.
+
+11d OBSERVABILITY AND FINAL QA
+9. Sentry (@sentry/node, pinned) wired to the app and worker, with the same redaction rules as logging; pino logs to stdout; queue depth and job duration in /metrics protected by a token.
+10. End-to-end script scripts/e2e.js (live, needs GROQ_API_KEY and sample files I supply in tests/e2e-samples/: one English, one Hindi, one Hinglish video, 3-5 minutes each): upload each, run the full pipeline, then assert and print: transcript has words; language and script are right (Devanagari share for Hindi, Latin for Hinglish); 3 or more clips; no two clips overlap by more than 30 percent; every clip is 15-90 s; the output is 1080x1920 with audio; captions are burned in (extract a frame at 2 s and report the share of non-background pixels in the caption region); hook, title, description and 5-8 hashtags exist; total wall time and Groq tokens used. Save frames in tests/output/ and print their paths.
+11. Failure drills, each as a script or a documented manual step with the observed result: Groq returns 429 for 2 minutes; Groq down; yt-dlp fails; Redis restarts during a job (the job must resume or fail cleanly, never hang); the disk is nearly full (clear error); the worker is killed with SIGKILL mid-render (the job is requeued or marked failed within 5 minutes); R2 unreachable.
+12. Load test: 3 jobs at once on the real server size; report CPU, memory, and time per source minute. Report the maximum number of concurrent jobs this server can handle.
+13. Final checks: npm test (all green), npm audit, scripts/check-secrets.sh, docs/security.md up to date, README.md rewritten with real setup instructions (local dev without Docker, with Docker, environment variable table, how to run tests).
+
+Definition of done: all four parts reported separately with real command output; e2e script results for the three languages pasted; a launch checklist file docs/LAUNCH_CHECKLIST.md with every remaining manual item (Google verification and quota audit, domain, DNS, legal review, Razorpay live keys and KYC, backups verified, rotate every key used during development).
