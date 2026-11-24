@@ -10,8 +10,9 @@ import os from 'os';
 import path from 'path';
 import { SCORING_CONFIG, getGenreProfile } from './genre_config.js';
 import { aiRegistry } from './ai/registry.js';
+import { runClipEngine } from './clip_engine/index.js';
 
-// ─── LLM System Prompt ──────────────────────
+// ─── LLM System Prompt (Legacy Ollama) ──────
 const BASE_SYSTEM_PROMPT = `You are a world-class viral clip analyst for short-form video (TikTok, YouTube Shorts, Instagram Reels).
 
 For EACH segment, evaluate and return a structured JSON rubric.
@@ -109,18 +110,33 @@ Response format: Just the 2-sentence summary. Nothing else.`;
 
 // ─── Rank and Select Clips ──────────────────
 /**
- * Main ranking function: LLM-score pre-filtered segments, refine boundaries,
- * then greedily select diverse, non-overlapping clips.
- *
- * @param {Object[]} scoredSegments - Segments with heuristic scores from scorer.js
- * @param {string} genre - Genre key
- * @param {number} numClips - Number of clips to select
- * @param {string} [_ollamaUrl] - Legacy parameter (ignored, provider resolved via registry)
- * @param {string} [_model] - Legacy parameter (ignored, provider resolved via registry)
- * @param {Object} options - { videoContext, onLog }
- * @returns {Promise<ClipCandidate[]>}
+ * Main ranking function facade: routes to new Clip Intelligence Engine
+ * by default (Groq), or falls back to legacy Ollama ranking when LLM_PROVIDER=ollama.
  */
 export async function rankAndSelectClips(scoredSegments, genre, numClips, _ollamaUrl, _model, options = {}) {
+  const provider = (process.env.LLM_PROVIDER || 'groq').toLowerCase();
+
+  if (provider !== 'ollama') {
+    const transcript = options.transcript || {
+      words: (scoredSegments || []).flatMap(s => s.words || []),
+      text: (scoredSegments || []).map(s => s.text || '').join(' '),
+      language: options.language || 'en',
+    };
+
+    return await runClipEngine(transcript, {
+      genre,
+      clipCount: numClips,
+      ...options,
+    });
+  }
+
+  return await legacyRankAndSelectClips(scoredSegments, genre, numClips, _ollamaUrl, _model, options);
+}
+
+/**
+ * Legacy Ollama ranking implementation
+ */
+async function legacyRankAndSelectClips(scoredSegments, genre, numClips, _ollamaUrl, _model, options = {}) {
   const { videoContext = null, description = null, onLog = () => {} } = options;
   const profile = getGenreProfile(genre);
   const provider = aiRegistry.getLLMProvider();

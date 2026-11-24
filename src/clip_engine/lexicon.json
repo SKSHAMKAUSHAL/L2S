@@ -1,0 +1,22 @@
+{
+  "questions": {
+    "en": ["why", "how", "what", "when", "where", "who", "which", "whose", "can you", "did you", "is it", "do you", "could you"],
+    "hi": ["क्यों", "कैसे", "क्या", "कब", "कहाँ", "कौन", "किसका", "कितना", "किधर"],
+    "hinglish": ["kyu", "kyun", "kaise", "kya", "kab", "kaha", "kahan", "kaun", "kiska", "kitna"]
+  },
+  "numbers": {
+    "en": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "first", "second", "third", "million", "billion", "percent", "%", "hundred", "thousand", "rule", "steps", "ways"],
+    "hi": ["१", "२", "३", "४", "५", "६", "७", "८", "९", "१०", "एक", "दो", "तीन", "चार", "पांच", "छह", "सात", "आठ", "नौ", "दस", "पहला", "दूसरा", "तीसरा", "लाख", "करोड़", "प्रतिशत", "नियम", "तरीके"],
+    "hinglish": ["ek", "do", "teen", "char", "paanch", "chhe", "saat", "aath", "nau", "das", "pehla", "doosra", "teesra", "lakh", "crore", "tarike", "niyam"]
+  },
+  "contradictions": {
+    "en": ["but", "however", "actually", "instead", "although", "except", "yet", "unless", "despite", "nevertheless", "on the other hand", "truth is", "reality is"],
+    "hi": ["लेकिन", "मगर", "परन्तु", "किन्तु", "असल में", "बल्कि", "हालांकि", "सच्चाई यह है", "वास्तव में"],
+    "hinglish": ["lekin", "magar", "parantu", "asal mein", "balki", "halanki", "par", "sach to ye hai"]
+  },
+  "superlatives": {
+    "en": ["best", "worst", "greatest", "most", "insane", "crazy", "shocking", "unbelievable", "secret", "never", "always", "huge", "ultimate", "guaranteed", "mistake", "dangerous", "illegal", "viral", "hack", "trick"],
+    "hi": ["सबसे", "बेहतरीन", "खतरनाक", "रहस्य", "चौंकाने वाला", "अविश्वसनीय", "गलती", "असली", "कमाल", "धमाकेदार", "गुप्त"],
+    "hinglish": ["sabse", "khatarnak", "rahasya", "asli", "kamaal", "zabardast", "galti", "secret", "chupaya"]
+  }
+}
