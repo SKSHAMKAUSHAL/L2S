@@ -59,6 +59,14 @@ import {
 } from './queue/index.js';
 import { processJob } from './worker.js';
 
+// Security Hardening (Step 8)
+import helmet from 'helmet';
+import { generalLimiter, loginLimiter, registerLimiter, jobCreationLimiter } from './security/rate_limit.js';
+import { logger, requestLogger } from './security/logger.js';
+import { validateYouTubeUrl } from './security/url.js';
+import { generatePKCE, createSessionOAuthState, consumeOAuthState } from './security/pkce.js';
+import { encryptToken, decryptToken } from './security/crypto.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, '..');
@@ -118,21 +126,59 @@ export function createApp(options = {}) {
   const repo = options.repo || defaultRepo;
   const app = express();
 
+  app.disable('x-powered-by');
+  app.set('trust proxy', process.env.TRUST_PROXY || 1);
+
+  // Structured Logging with Redaction & Request ID
+  app.use(requestLogger);
+
+  // Helmet Security Headers & Content Security Policy (No unsafe-inline for scripts)
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+          fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+          imgSrc: ["'self'", 'data:', 'https:', 'blob:'],
+          mediaSrc: ["'self'", 'blob:', 'data:'],
+          frameSrc: ["'self'", 'https://www.youtube.com', 'https://www.youtube-nocookie.com'],
+          connectSrc: ["'self'", 'ws:', 'wss:', 'http:', 'https:'],
+        },
+      },
+      crossOriginEmbedderPolicy: false,
+    })
+  );
+
+  // CORS closed by default (allow only env APP_ORIGIN)
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    const allowedOrigin = process.env.APP_ORIGIN;
+
+    if (origin) {
+      if (allowedOrigin && (allowedOrigin === '*' || origin === allowedOrigin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token, X-Request-Id, Authorization');
+      } else {
+        if (req.method === 'OPTIONS') {
+          return res.status(403).json({ error: 'CORS forbidden' });
+        }
+      }
+    }
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+
   app.use(cookieParser());
   app.use(express.json({ limit: '1mb' }));
 
-  // ─── Security Headers ──────────────
-  app.use((req, res, next) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-    res.setHeader('X-XSS-Protection', '1; mode=block');
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    res.setHeader(
-      'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: blob:; media-src 'self' blob: data:; frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com; child-src 'self' https://www.youtube.com https://www.youtube-nocookie.com; connect-src 'self' ws: wss: http: https:;"
-    );
-    next();
-  });
+  // General API rate limiter for all /api endpoints
+  app.use('/api', generalLimiter);
 
   // Unauthenticated page load redirect to /login.html
   app.get('/', (req, res, next) => {
@@ -151,7 +197,7 @@ export function createApp(options = {}) {
 
   // ─── Public Auth Endpoints ────────────────────────────
 
-  app.post('/api/auth/register', async (req, res) => {
+  app.post('/api/auth/register', registerLimiter, async (req, res) => {
     try {
       const { email, password, plan } = req.body || {};
       const { user, sessionToken, csrfToken } = await registerUser(repo, { email, password, plan });
@@ -162,7 +208,7 @@ export function createApp(options = {}) {
     }
   });
 
-  app.post('/api/auth/login', async (req, res) => {
+  app.post('/api/auth/login', loginLimiter, async (req, res) => {
     try {
       const { email, password } = req.body || {};
       const { user, sessionToken, csrfToken } = await loginUser(repo, { email, password });
@@ -267,9 +313,10 @@ export function createApp(options = {}) {
   });
 
   // Authenticated File Streaming with Range Support
-  app.get('/api/files/:jobId/*', requireAuth, (req, res) => {
+  app.get('/api/files/:jobId/*filePath', requireAuth, (req, res) => {
     const { jobId } = req.params;
-    const subPath = req.params[0] || '';
+    const raw = req.params.filePath || req.params[0] || '';
+    const subPath = Array.isArray(raw) ? raw.join('/') : String(raw);
 
     if (subPath.includes('..') || path.isAbsolute(subPath)) {
       return res.status(400).json({ error: 'Invalid path' });
@@ -320,7 +367,7 @@ export function createApp(options = {}) {
   });
 
   // Pipeline Enqueue
-  app.post('/api/process', requireAuth, async (req, res) => {
+  app.post('/api/process', requireAuth, jobCreationLimiter, async (req, res) => {
     try {
       const {
         source,
@@ -344,10 +391,22 @@ export function createApp(options = {}) {
         return res.status(400).json({ error: 'Source video URL or path is required' });
       }
 
+      let sourceRef = targetSource;
+      let sourceType = 'local';
+      if (typeof targetSource === 'string' && (targetSource.startsWith('http://') || targetSource.startsWith('https://'))) {
+        try {
+          const validated = validateYouTubeUrl(targetSource);
+          sourceRef = validated.canonicalUrl;
+          sourceType = 'youtube';
+        } catch (err) {
+          return res.status(400).json({ error: err.message });
+        }
+      }
+
       const job = await enqueueJob(repo, {
         userId: req.user.id,
-        sourceType: targetSource.startsWith('http') ? 'youtube' : 'local',
-        sourceRef: targetSource,
+        sourceType,
+        sourceRef,
         params: {
           genre,
           language,
@@ -712,15 +771,91 @@ export function createApp(options = {}) {
 
   app.get('/api/connect/:platform', requireAuth, (req, res) => {
     const { platform } = req.params;
+    if (platform === 'youtube') {
+      const { codeVerifier, codeChallenge } = generatePKCE();
+      const state = createSessionOAuthState(req.user.id, codeVerifier);
+      const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+      const redirectUri = `${baseUrl}/api/auth/callback/youtube`;
+      const clientId = process.env.YOUTUBE_CLIENT_ID || 'dummy_client_id';
+
+      const params = new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        response_type: 'code',
+        scope: 'https://www.googleapis.com/auth/youtube.upload openid email profile',
+        access_type: 'offline',
+        prompt: 'consent',
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256',
+      });
+
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+      return res.json({ success: true, platform, authUrl, state, codeChallenge });
+    }
     res.json({ success: true, platform });
   });
 
   app.post('/api/connect/:platform', requireAuth, (req, res) => {
-    res.json({ success: true, authUrl: 'http://localhost:3000/api/auth/callback/youtube' });
+    const { platform } = req.params;
+    if (platform === 'youtube') {
+      const { codeVerifier, codeChallenge } = generatePKCE();
+      const state = createSessionOAuthState(req.user.id, codeVerifier);
+      const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+      const redirectUri = `${baseUrl}/api/auth/callback/youtube`;
+      const clientId = process.env.YOUTUBE_CLIENT_ID || 'dummy_client_id';
+
+      const params = new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        response_type: 'code',
+        scope: 'https://www.googleapis.com/auth/youtube.upload openid email profile',
+        access_type: 'offline',
+        prompt: 'consent',
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256',
+      });
+
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+      return res.json({ success: true, platform, authUrl, state, codeChallenge });
+    }
+    res.json({ success: true, platform, authUrl: 'http://localhost:3000/api/auth/callback/youtube' });
   });
 
-  app.get('/api/auth/callback/youtube', requireAuth, (req, res) => {
-    res.send('<html><body>YouTube Connected</body></html>');
+  app.get('/api/auth/callback/youtube', async (req, res) => {
+    const { state, code, error } = req.query;
+    if (error) {
+      return res.status(400).send(`OAuth error: ${error}`);
+    }
+
+    if (!state) {
+      return res.status(400).json({ error: 'Missing OAuth state parameter' });
+    }
+
+    const stateResult = consumeOAuthState(String(state));
+    if (!stateResult.valid) {
+      return res.status(400).json({ error: stateResult.error });
+    }
+
+    const userId = stateResult.userId;
+    const tokenPayload = {
+      access_token: 'dummy_access_token_' + Date.now(),
+      refresh_token: 'dummy_refresh_token_' + Date.now(),
+      expiry_date: Date.now() + 3600000,
+      scope: 'https://www.googleapis.com/auth/youtube.upload',
+      token_type: 'Bearer',
+      created_at: new Date().toISOString(),
+    };
+
+    const encBlob = encryptToken(JSON.stringify(tokenPayload));
+    repo.saveOAuthToken({
+      userId,
+      provider: 'youtube',
+      encBlob,
+    });
+
+    res.send('<!DOCTYPE html><html><body><h2>YouTube Connected</h2><script>if(window.opener){window.opener.postMessage({type:"oauth_callback",platform:"youtube",success:true},"*");window.close();}</script></body></html>');
   });
 
   app.get('/api/auth/callback/instagram', requireAuth, (req, res) => {
@@ -743,10 +878,12 @@ export function createApp(options = {}) {
     const url = req.query.url;
     if (!url) return res.status(400).json({ error: 'url parameter is required' });
     try {
-      const info = await fetchVideoInfoAsync(url);
+      const { canonicalUrl } = validateYouTubeUrl(url);
+      const info = await fetchVideoInfoAsync(canonicalUrl, 30000);
       res.json(info);
     } catch (e) {
-      res.status(500).json({ error: e.message });
+      const isClientErr = e.message.includes('protocol') || e.message.includes('authorized') || e.message.includes('Malformed') || e.message.includes('Playlists') || e.message.includes('dash') || e.message.includes('video ID') || e.message.includes('userinfo') || e.message.includes('Custom ports');
+      res.status(isClientErr ? 400 : 500).json({ error: e.message });
     }
   });
 
@@ -783,6 +920,18 @@ export function createApp(options = {}) {
     res.redirect(301, '/');
   });
 
+  // ─── Global Error Handler ───────────────────────────────────────────────
+  app.use((err, req, res, next) => {
+    const status = err.status || err.statusCode || 500;
+    const reqId = req.id || 'unknown';
+    logger.error({ err, reqId, url: req.originalUrl, method: req.method }, `Server error: ${err.message}`);
+
+    res.status(status).json({
+      error: status === 500 ? 'An unexpected server error occurred' : err.message,
+      requestId: reqId,
+    });
+  });
+
   return app;
 }
 
@@ -810,6 +959,14 @@ if (isDirectRun) {
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname !== '/ws') {
+      socket.destroy();
+      return;
+    }
+
+    const origin = req.headers.origin;
+    const allowedOrigin = process.env.APP_ORIGIN;
+    if (origin && allowedOrigin && allowedOrigin !== '*' && origin !== allowedOrigin) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;
     }

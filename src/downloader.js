@@ -1,106 +1,94 @@
 // =============================================
 // SKATE — Downloader (yt-dlp + FFmpeg)
-// Fixed: 403 errors, cookies, retry logic
+// Hardened for Step 8 Security Standards
 // =============================================
 
 import path from "path";
 import fs from "fs";
-import os from "os";
 import { spawnTracked } from "./process_manager.js";
+import { validateYouTubeUrl } from "./security/url.js";
 
-// Find local cookies.txt if provided by user in standard project locations
-function findCookiesFile() {
-  const possiblePaths = [
-    path.join(process.cwd(), "cookies.txt"),
-    path.join(process.cwd(), "youtube_cookies.txt"),
-    path.join(process.cwd(), "temp", "cookies.txt"),
-    path.join(os.homedir(), "cookies.txt"),
-    path.join(os.homedir(), "Downloads", "cookies.txt"),
-  ];
+const MAX_DOWNLOAD_BYTES = process.env.MAX_DOWNLOAD_BYTES || '2G';
+const MAX_SECONDS = process.env.MAX_SECONDS || '7200';
+const MAX_BUFFER_BYTES = 10 * 1024 * 1024; // 10MB output buffer cap
 
-  for (const p of possiblePaths) {
-    try {
-      if (fs.existsSync(p) && fs.statSync(p).isFile()) {
-        return p;
-      }
-    } catch (e) { /* ignore */ }
-  }
-  return null;
-}
-
-// Order candidate browsers prioritizing those without DPAPI issues on Windows (Firefox first)
-function getCandidateBrowsers() {
-  return ["firefox", "chrome", "edge", "brave", "opera", "chromium", "safari", "vivaldi"];
-}
-
-// Export detectBrowser for backwards compatibility
-export function detectBrowser() {
-  return "firefox";
-}
-
-export function runCommandAsync(command, args, timeoutMs = 600000) {
+/**
+ * Execute command asynchronously with process tracking, timeout, and buffer capping
+ */
+export function runCommandAsync(command, args, timeoutMs = 600000, jobId = null) {
   return new Promise((resolve, reject) => {
-    const child = spawnTracked(command, args);
+    // shell is strictly false to prevent shell injection
+    const child = spawnTracked(command, args, { shell: false }, jobId);
     let stdout = "";
     let stderr = "";
+    let killedByTimeout = false;
 
     const timer = setTimeout(() => {
-      try { child.kill('SIGTERM'); } catch (e) {}
+      killedByTimeout = true;
+      try {
+        if (child.pid && !child.killed) {
+          child.kill('SIGTERM');
+          setTimeout(() => {
+            try { child.kill('SIGKILL'); } catch {}
+          }, 2000).unref();
+        }
+      } catch (e) {}
       reject(new Error(`${command} timed out after ${timeoutMs / 1000}s`));
     }, timeoutMs);
 
-    child.stdout.on("data", (data) => { stdout += data.toString(); });
-    child.stderr.on("data", (data) => { stderr += data.toString(); });
+    child.stdout.on("data", (data) => {
+      if (stdout.length + data.length <= MAX_BUFFER_BYTES) {
+        stdout += data.toString();
+      }
+    });
+
+    child.stderr.on("data", (data) => {
+      if (stderr.length + data.length <= MAX_BUFFER_BYTES) {
+        stderr += data.toString();
+      }
+    });
 
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ status: code, stdout, stderr });
+      if (!killedByTimeout) {
+        resolve({ status: code, stdout, stderr });
+      }
     });
 
     child.on("error", (err) => {
       clearTimeout(timer);
-      reject(err);
+      if (!killedByTimeout) {
+        reject(err);
+      }
     });
   });
 }
 
 /**
- * Fetch YouTube video metadata asynchronously without blocking the event loop
- *
+ * Fetch YouTube video metadata asynchronously without blocking the event loop (30s timeout)
  * @param {string} url - YouTube URL
  * @param {number} [timeoutMs=30000] - Timeout in milliseconds
  * @returns {Promise<Object>} Metadata object
  */
 export async function fetchVideoInfoAsync(url, timeoutMs = 30000) {
   if (!url || typeof url !== 'string') throw new Error('URL is required');
-  const cleanUrl = url.trim();
-  if (cleanUrl.startsWith('-') || cleanUrl.startsWith('/dev/')) {
-    throw new Error('Invalid URL format');
-  }
+  
+  // Validate and normalize URL to prevent SSRF and argument injection
+  const { canonicalUrl } = validateYouTubeUrl(url);
 
-  // Strategy 1: modern default client (fast, non-blocking)
-  let res = await runCommandAsync('yt-dlp', [
+  const args = [
     '--dump-json',
     '--no-download',
     '--no-warnings',
+    '--no-playlist',
+    '--socket-timeout', '30',
+    '--retries', '3',
     '--extractor-args', 'youtube:player_client=mediaconnect',
-    '--no-check-certificates',
     '--',
-    cleanUrl,
-  ], timeoutMs);
+    canonicalUrl,
+  ];
 
-  // Strategy 2: browser cookies fallback
-  if (res.status !== 0) {
-    res = await runCommandAsync('yt-dlp', [
-      '--dump-json',
-      '--no-download',
-      '--no-warnings',
-      '--cookies-from-browser', 'chrome',
-      '--no-check-certificates',
-      '--',
-      cleanUrl,
-    ], timeoutMs);
-  }
+  const res = await runCommandAsync('yt-dlp', args, timeoutMs);
 
   if (res.status !== 0) {
     throw new Error(`Could not fetch video info: ${res.stderr?.trim() || 'yt-dlp exited with code ' + res.status}`);
@@ -111,17 +99,22 @@ export async function fetchVideoInfoAsync(url, timeoutMs = 30000) {
 
 /**
  * Download video from YouTube using yt-dlp
- * Handles 403 errors, DPAPI decryption errors, and bot restrictions
+ * Hardened: Strict SSL verification, no browser cookies probing.
+ * Enforces --no-playlist, --max-filesize, --match-filter, and '--' before URL.
+ *
  * @param {string} url - YouTube URL
  * @param {string} outputDir - Output directory
  * @param {Function} onLog - Logging callback
- * @param {string} quality - Video quality: 'high' (best available), 'medium' (1080p), or 'fast' (720p)
+ * @param {string} quality - Video quality: 'high', 'medium', 'fast', '1080p', etc.
+ * @param {string} [jobId] - Optional jobId for process cancellation tracking
  */
-export async function downloadVideo(url, outputDir, onLog, quality = 'high') {
+export async function downloadVideo(url, outputDir, onLog, quality = 'high', jobId = null) {
   fs.mkdirSync(outputDir, { recursive: true });
   const outputTemplate = path.join(outputDir, "%(id)s.%(ext)s");
 
-  // Quality format strings from quality_profiles
+  const { canonicalUrl } = validateYouTubeUrl(url);
+
+  // Quality format profiles
   const qualityFormats = {
     best: "bestvideo+bestaudio/best",
     '4k': "bestvideo[height<=2160]+bestaudio/best[height<=2160]/best",
@@ -139,7 +132,11 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high') {
   const commonArgs = [
     "-f", selectedFormat,
     "--merge-output-format", "mp4",
-    "--no-check-certificates",
+    "--no-playlist",
+    "--max-filesize", MAX_DOWNLOAD_BYTES,
+    "--match-filter", `duration<=${MAX_SECONDS}`,
+    "--socket-timeout", "30",
+    "--retries", "3",
     "-o", outputTemplate,
     "--print", "after_move:filepath",
     "--no-simulate",
@@ -149,89 +146,47 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high') {
   const strategies = [
     {
       name: "Standard download",
-      args: [...commonArgs, url],
+      args: [...commonArgs, "--", canonicalUrl],
     },
     {
       name: "iOS & Mobile Web client",
       args: [
         "-f", selectedFormat,
         "--merge-output-format", "mp4",
+        "--no-playlist",
+        "--max-filesize", MAX_DOWNLOAD_BYTES,
+        "--match-filter", `duration<=${MAX_SECONDS}`,
+        "--socket-timeout", "30",
+        "--retries", "3",
         "--extractor-args", "youtube:player_client=ios,mweb",
-        "--no-check-certificates",
         "-o", outputTemplate,
         "--print", "after_move:filepath",
         "--no-simulate",
         "--no-warnings",
-        url,
+        "--",
+        canonicalUrl,
+      ],
+    },
+    {
+      name: "Android client fallback",
+      args: [
+        "-f", selectedFormat,
+        "--merge-output-format", "mp4",
+        "--no-playlist",
+        "--max-filesize", MAX_DOWNLOAD_BYTES,
+        "--match-filter", `duration<=${MAX_SECONDS}`,
+        "--socket-timeout", "30",
+        "--retries", "3",
+        "--extractor-args", "youtube:player_client=android",
+        "-o", outputTemplate,
+        "--print", "after_move:filepath",
+        "--no-simulate",
+        "--no-warnings",
+        "--",
+        canonicalUrl,
       ],
     },
   ];
-
-  // Check if local cookies file exists
-  const cookiesFile = findCookiesFile();
-  if (cookiesFile) {
-    strategies.push({
-      name: `Local cookies file (${path.basename(cookiesFile)})`,
-      args: [
-        "-f", selectedFormat,
-        "--merge-output-format", "mp4",
-        "--cookies", cookiesFile,
-        "--no-check-certificates",
-        "-o", outputTemplate,
-        "--print", "after_move:filepath",
-        "--no-simulate",
-        "--no-warnings",
-        url,
-      ],
-    });
-  }
-
-  // Add browser cookie strategies (Firefox first to avoid Windows DPAPI restriction)
-  for (const browser of getCandidateBrowsers()) {
-    strategies.push({
-      name: `With ${browser} cookies`,
-      browser,
-      args: [
-        "-f", selectedFormat,
-        "--merge-output-format", "mp4",
-        "--cookies-from-browser", browser,
-        "--no-check-certificates",
-        "-o", outputTemplate,
-        "--print", "after_move:filepath",
-        "--no-simulate",
-        "--no-warnings",
-        url,
-      ],
-    });
-  }
-
-  // Android client fallback
-  strategies.push({
-    name: "Android client fallback",
-    args: [
-      "-f", selectedFormat,
-      "--merge-output-format", "mp4",
-      "--extractor-args", "youtube:player_client=android",
-      "--no-check-certificates",
-      "-o", outputTemplate,
-      "--print", "after_move:filepath",
-      "--no-simulate",
-      "--no-warnings",
-      url,
-    ],
-  });
-
-  // Audio-only fallback
-  strategies.push({
-    name: "Audio-only fallback",
-    args: [
-      "-f", "bestaudio/best",
-      "-x", "--audio-format", "mp3",
-      "--no-check-certificates",
-      "-o", outputTemplate,
-      url,
-    ],
-  });
 
   let lastError = "";
 
@@ -239,30 +194,10 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high') {
     if (onLog) onLog(`Trying: ${strategy.name}...`);
 
     try {
-      const result = await runCommandAsync("yt-dlp", strategy.args, 600000);
+      const result = await runCommandAsync("yt-dlp", strategy.args, 600000, jobId);
 
       if (result.status !== 0) {
         lastError = (result.stderr || "").trim();
-
-        // Catch DPAPI decryption errors specific to Windows Chrome 127+
-        if (lastError.includes("Failed to decrypt with DPAPI")) {
-          if (onLog) {
-            onLog(`Strategy "${strategy.name}" skipped due to DPAPI restriction. Trying next strategy...`);
-          }
-          continue;
-        }
-
-        // Browser not installed / cookies unreadable
-        if (
-          lastError.includes("Could not copy Chrome cookie database") ||
-          lastError.includes("No browser found") ||
-          lastError.includes("could not find browser") ||
-          lastError.includes("KeyError")
-        ) {
-          if (onLog) onLog(`Strategy "${strategy.name}" skipped (${strategy.browser || "browser"} cookies not available). Trying next...`);
-          continue;
-        }
-
         if (onLog) onLog(`Strategy "${strategy.name}" failed: ${lastError.split("\n")[0]}`);
         continue;
       }
@@ -278,7 +213,6 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high') {
         }
       }
 
-      // Try to find file in output directory
       const found = findLatestVideo(outputDir);
       if (found) return found;
     } catch (err) {
@@ -287,27 +221,18 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high') {
     }
   }
 
-  // All strategies failed
-  throw new Error(
-    `Download failed after trying all strategies.\n` +
-    `Last error: ${lastError}\n\n` +
-    `💡 Tips to resolve YouTube download issues:\n` +
-    `   1. Open YouTube in Firefox and log in (Firefox cookies work without DPAPI restrictions).\n` +
-    `   2. Or export YouTube cookies and save as cookies.txt in the project folder.\n` +
-    `   3. Update yt-dlp: pip install --upgrade yt-dlp`
-  );
+  throw new Error(`Download failed after trying all strategies.\nLast error: ${lastError}`);
 }
 
 /**
  * Extract audio from video using FFmpeg
  */
-export async function extractAudio(videoPath, outputDir) {
+export async function extractAudio(videoPath, outputDir, jobId = null) {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const baseName = path.basename(videoPath, path.extname(videoPath));
   const audioFile = path.join(outputDir, `${baseName}.wav`);
 
-  // Skip if already extracted
   if (fs.existsSync(audioFile)) {
     return audioFile;
   }
@@ -320,7 +245,7 @@ export async function extractAudio(videoPath, outputDir) {
     "-ac", "1",
     "-y",
     audioFile,
-  ], 600000);
+  ], 600000, jobId);
 
   if (result.status !== 0) {
     const stderr = (result.stderr || "").trim();

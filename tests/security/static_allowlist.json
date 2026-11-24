@@ -1,0 +1,11 @@
+{
+  "allowedExecOccurrences": [
+    "src/ranker.js",
+    "src/clip_engine/signals.js",
+    "src/db/index.js"
+  ],
+  "allowedShellTrueOccurrences": [],
+  "allowedInnerHTMLFiles": [
+    "public/app.js"
+  ]
+}

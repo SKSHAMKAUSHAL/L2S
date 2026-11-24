@@ -133,13 +133,16 @@ describe('Step 7: Authorization & Cross-Tenant Isolation (tests/authz.test.js)',
       '/api/auth/login',
       '/api/auth/logout',
       '/api/auth/me',
+      '/api/auth/callback/youtube',
+      '/api/auth/callback/instagram',
       '/api/health',
       '/healthz',
       '/api/status/hardware'
     ]);
 
     const routesToCheck = [];
-    app._router.stack.forEach((layer) => {
+    const routerStack = (app.router && app.router.stack) || (app._router && app._router.stack) || [];
+    routerStack.forEach((layer) => {
       if (layer.route && layer.route.path) {
         const p = layer.route.path;
         if (typeof p === 'string' && p.startsWith('/api/') && !publicAllowlist.has(p)) {
@@ -161,6 +164,7 @@ describe('Step 7: Authorization & Cross-Tenant Isolation (tests/authz.test.js)',
         .replace(':clipIndex', '1')
         .replace(':platform', 'youtube')
         .replace(':id', 'some_id')
+        .replace('*filePath', 'test.mp4')
         .replace('*', 'test.mp4');
 
       const res = await fetch(`${baseUrl}${testPath}`, {

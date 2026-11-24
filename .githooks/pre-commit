@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit
+# Enforce secret check before committing.
+# Enable in repository: git config core.hooksPath .githooks
+
+bash scripts/check-secrets.sh
+if [ $? -ne 0 ]; then
+  echo "Pre-commit hook failed: Please remove secrets before committing."
+  exit 1
+fi
