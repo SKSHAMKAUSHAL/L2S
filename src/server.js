@@ -24,7 +24,7 @@ import {
   getConnectionStatus, getCredentialStatus,
   disconnectYouTube, isInstagramEnabled,
 } from './auth.js';
-import { publishClipToYouTube, uploadToYouTube, formatYouTubeMetadata } from './uploader.js';
+import { publishClipToYouTube, uploadToYouTube, formatYouTubeMetadata, publishClipToInstagram, uploadToInstagram } from './uploader.js';
 import { getQuotaStatus, checkQuotaBeforeUpload } from './services/youtube_quota.js';
 import { aiRegistry } from './ai/registry.js';
 import { CAPTION_PRESETS } from './captions/presets.js';
@@ -64,7 +64,7 @@ import { processJob } from './worker.js';
 import helmet from 'helmet';
 import { generalLimiter, loginLimiter, registerLimiter, jobCreationLimiter } from './security/rate_limit.js';
 import { logger, requestLogger } from './security/logger.js';
-import { validateYouTubeUrl } from './security/url.js';
+import { validateYouTubeUrl, validateMediaUrl, validateInstagramUrl } from './security/url.js';
 import { generatePKCE, createSessionOAuthState, consumeOAuthState } from './security/pkce.js';
 import { encryptToken, decryptToken } from './security/crypto.js';
 
@@ -404,9 +404,9 @@ export function createApp(options = {}) {
       let sourceType = 'local';
       if (typeof targetSource === 'string' && (targetSource.startsWith('http://') || targetSource.startsWith('https://'))) {
         try {
-          const validated = validateYouTubeUrl(targetSource);
+          const validated = validateMediaUrl(targetSource);
           sourceRef = validated.canonicalUrl;
-          sourceType = 'youtube';
+          sourceType = validated.platform;
         } catch (err) {
           return res.status(400).json({ error: err.message });
         }
@@ -865,7 +865,18 @@ export function createApp(options = {}) {
 
   app.post('/api/publish-clip', requireAuth, async (req, res) => {
     try {
-      const { clipId, jobId, clipIndex, metadata = {} } = req.body || {};
+      let { clipId, jobId, clipIndex, platform = 'youtube', metadata = {}, clip: bodyClip, workflow, fileUrl } = req.body || {};
+
+      if (bodyClip) {
+        if (!clipId) clipId = bodyClip.id;
+        if (!jobId) jobId = bodyClip.job_id;
+        if (clipIndex === undefined) clipIndex = bodyClip.idx;
+      }
+      if (!metadata || Object.keys(metadata).length === 0) {
+        if (workflow && workflow[platform]) {
+          metadata = workflow[platform];
+        }
+      }
 
       let clip = null;
       if (clipId) {
@@ -880,11 +891,18 @@ export function createApp(options = {}) {
 
       if (!clip) {
         const padNum = String(clipIndex || 0).padStart(2, '0');
-        const fallbackPath = path.resolve(rootDir, 'output', jobId, 'clips', `clip-${padNum}.mp4`);
-        if (fs.existsSync(fallbackPath)) {
+        let fallbackPath = jobId ? path.resolve(rootDir, 'output', jobId, 'clips', `clip-${padNum}.mp4`) : null;
+        if (!fallbackPath || !fs.existsSync(fallbackPath)) {
+          if (fileUrl) {
+            const rel = fileUrl.replace(/^\/api\/files\//, '').replace(/^\/output\//, '');
+            const cand = path.resolve(rootDir, 'output', rel);
+            if (fs.existsSync(cand)) fallbackPath = cand;
+          }
+        }
+        if (fallbackPath && fs.existsSync(fallbackPath)) {
           clip = {
             id: clipId || 'clp_' + Date.now(),
-            job_id: jobId,
+            job_id: jobId || 'job_' + Date.now(),
             user_id: req.user.id,
             idx: Number(clipIndex || 0),
             title: metadata.title || `Clip ${Number(clipIndex || 0) + 1}`,
@@ -908,17 +926,35 @@ export function createApp(options = {}) {
         return res.status(404).json({ error: 'Rendered video file for this clip does not exist on disk' });
       }
 
-      const result = await publishClipToYouTube({
-        clipId: clip.id,
-        userId: req.user.id,
-        jobId: clip.job_id,
-        filePath,
-        metadata,
-        clip,
-        clipIndex: clip.idx,
-        repo,
-        broadcast,
-      });
+      let result;
+      if (platform === 'instagram') {
+        const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+        const fileUrl = `${baseUrl}/api/files/${clip.job_id}/clips/${path.basename(filePath)}`;
+        result = await publishClipToInstagram({
+          clipId: clip.id,
+          userId: req.user.id,
+          jobId: clip.job_id,
+          filePath,
+          fileUrl,
+          metadata,
+          clip,
+          clipIndex: clip.idx,
+          repo,
+          broadcast,
+        });
+      } else {
+        result = await publishClipToYouTube({
+          clipId: clip.id,
+          userId: req.user.id,
+          jobId: clip.job_id,
+          filePath,
+          metadata,
+          clip,
+          clipIndex: clip.idx,
+          repo,
+          broadcast,
+        });
+      }
 
       res.json(result);
     } catch (err) {
@@ -943,11 +979,12 @@ export function createApp(options = {}) {
     const url = req.query.url;
     if (!url) return res.status(400).json({ error: 'url parameter is required' });
     try {
-      const { canonicalUrl } = validateYouTubeUrl(url);
-      const info = await fetchVideoInfoAsync(canonicalUrl, 30000);
+      const media = validateMediaUrl(url);
+      const info = await fetchVideoInfoAsync(media.canonicalUrl, 30000);
+      info.platform = media.platform;
       res.json(info);
     } catch (e) {
-      const isClientErr = e.message.includes('protocol') || e.message.includes('authorized') || e.message.includes('Malformed') || e.message.includes('Playlists') || e.message.includes('dash') || e.message.includes('video ID') || e.message.includes('userinfo') || e.message.includes('Custom ports');
+      const isClientErr = e.message.includes('protocol') || e.message.includes('authorized') || e.message.includes('Malformed') || e.message.includes('Playlists') || e.message.includes('dash') || e.message.includes('video ID') || e.message.includes('userinfo') || e.message.includes('Custom ports') || e.message.includes('Instagram');
       res.status(isClientErr ? 400 : 500).json({ error: e.message });
     }
   });

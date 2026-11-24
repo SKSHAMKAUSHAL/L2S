@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateYouTubeUrl } from '../../src/security/url.js';
+import { validateYouTubeUrl, validateInstagramUrl, validateMediaUrl } from '../../src/security/url.js';
 
 describe('Step 8: URL Validation & SSRF Abuse Tests (url.test.js)', () => {
   it('accepts valid standard YouTube URLs and returns canonical form', () => {
@@ -52,5 +52,53 @@ describe('Step 8: URL Validation & SSRF Abuse Tests (url.test.js)', () => {
         `Expected validation to fail for input: ${testCase}`
       );
     }
+  });
+
+  it('accepts valid Instagram Reel and post URLs', () => {
+    const validInstagram = [
+      { input: 'https://www.instagram.com/reel/C3zYx7bI1_a/', code: 'C3zYx7bI1_a', type: 'reel' },
+      { input: 'https://instagram.com/reels/C3zYx7bI1_a/', code: 'C3zYx7bI1_a', type: 'reel' },
+      { input: 'https://m.instagram.com/p/C3zYx7bI1_a', code: 'C3zYx7bI1_a', type: 'p' },
+      { input: 'https://www.instagram.com/tv/C3zYx7bI1_a/', code: 'C3zYx7bI1_a', type: 'tv' },
+    ];
+
+    for (const { input, code, type } of validInstagram) {
+      const res = validateInstagramUrl(input);
+      assert.equal(res.valid, true);
+      assert.equal(res.platform, 'instagram');
+      assert.equal(res.shortcode, code);
+      assert.equal(res.canonicalUrl, `https://www.instagram.com/${type}/${code}/`);
+    }
+  });
+
+  it('rejects invalid or malicious Instagram URLs', () => {
+    const invalidCases = [
+      'http://www.instagram.com/reel/C3zYx7bI1_a/', // http
+      'https://instagram.com.evil.com/reel/C3zYx7bI1_a/', // spoofed domain
+      'https://www.instagram.com/explore/', // not a reel/post
+      'https://www.instagram.com/reel/abc', // too short code (<5)
+      '--output /tmp/evil', // flag injection
+      'https://user@instagram.com/reel/C3zYx7bI1_a/', // userinfo
+    ];
+
+    for (const input of invalidCases) {
+      assert.throws(
+        () => validateInstagramUrl(input),
+        Error,
+        `Expected invalid Instagram URL to throw: ${input}`
+      );
+    }
+  });
+
+  it('validateMediaUrl correctly discriminates YouTube vs Instagram', () => {
+    const yt = validateMediaUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    assert.equal(yt.platform, 'youtube');
+    assert.equal(yt.id, 'dQw4w9WgXcQ');
+
+    const ig = validateMediaUrl('https://www.instagram.com/reel/C3zYx7bI1_a/');
+    assert.equal(ig.platform, 'instagram');
+    assert.equal(ig.id, 'C3zYx7bI1_a');
+
+    assert.throws(() => validateMediaUrl('https://tiktok.com/@user/video/12345'), Error);
   });
 });

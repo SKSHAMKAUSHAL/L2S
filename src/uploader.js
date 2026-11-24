@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { getValidYouTubeToken, refreshYouTubeToken, getStoredYouTubeToken, isInstagramEnabled, getInstagramAuthUrl, exchangeInstagramCode } from './auth.js';
 import { checkQuotaBeforeUpload, consumeQuota, getQuotaStatus } from './services/youtube_quota.js';
+import { decryptToken } from './security/crypto.js';
 
 const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB (32 * 256 KB)
 const MAX_CHUNK_RETRIES = 3;
@@ -449,6 +450,185 @@ export async function publishClipToYouTube({
     });
     repo.updateClip(clipId, {
       publish_status: newStatus,
+    });
+  }
+
+  return {
+    publishJobId: pubJob.id,
+    ...result,
+  };
+}
+
+/**
+ * Upload video to Instagram as a Reel
+ * Uses user's encrypted Instagram token stored in SQLite
+ */
+export async function uploadToInstagram({
+  fileUrl,
+  filePath,
+  metadata = {},
+  clip = {},
+  clipIndex = 0,
+  userId,
+  repo,
+  onProgress,
+}) {
+  if (!userId || !repo) {
+    return { success: false, error: 'User ID and repository required for Instagram upload' };
+  }
+
+  const row = repo.getOAuthToken(userId, 'instagram');
+  if (!row || !row.enc_blob) {
+    return { success: false, error: 'Instagram not connected. Please connect your Instagram account in Settings.' };
+  }
+
+  let igAuth = null;
+  try {
+    igAuth = JSON.parse(decryptToken(row.enc_blob));
+  } catch (err) {
+    return { success: false, error: 'Failed to decrypt Instagram credentials' };
+  }
+
+  if (!igAuth.accessToken || !igAuth.igUserId) {
+    return { success: false, error: 'Instagram Business account ID or access token missing. Please reconnect.' };
+  }
+
+  const { accessToken, igUserId } = igAuth;
+
+  let caption = (typeof metadata.caption === 'string' ? applyTemplate(metadata.caption, clip, clipIndex) : null) || clip.caption || clip.title || '';
+  const hashtags = (typeof metadata.hashtags === 'string' ? applyTemplate(metadata.hashtags, clip, clipIndex) : null) || clip.hashtags || '';
+  if (hashtags && !caption.includes(hashtags)) {
+    caption = caption ? `${caption}\n\n${hashtags}` : hashtags;
+  }
+  caption = caption.slice(0, 2200);
+
+  const publicVideoUrl = fileUrl || metadata.videoUrl;
+  if (!publicVideoUrl || publicVideoUrl.includes('localhost') || publicVideoUrl.includes('127.0.0.1')) {
+    onProgress?.('⚠️ Note: Instagram Graph API requires a publicly reachable video URL (e.g. your production domain or tunnel).');
+  }
+
+  try {
+    onProgress?.(`📤 Initializing Instagram Reel container for clip ${clipIndex + 1}...`);
+    const containerUrl = `https://graph.facebook.com/v21.0/${igUserId}/media`;
+    const containerRes = await fetch(containerUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        media_type: 'REELS',
+        video_url: publicVideoUrl,
+        caption,
+        access_token: accessToken,
+      }),
+    });
+
+    if (!containerRes.ok) {
+      const err = await containerRes.text();
+      throw new Error(`Instagram container creation failed: ${err}`);
+    }
+
+    const containerData = await containerRes.json();
+    const containerId = containerData.id;
+
+    onProgress?.('⏳ Waiting for Instagram media processing...');
+    let status = 'IN_PROGRESS';
+    let attempts = 0;
+    while (status === 'IN_PROGRESS' && attempts < 30) {
+      await new Promise(r => setTimeout(r, 2000));
+      attempts++;
+      const statusRes = await fetch(`https://graph.facebook.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`);
+      if (statusRes.ok) {
+        const sData = await statusRes.json();
+        status = sData.status_code;
+        if (status === 'ERROR') throw new Error('Instagram media processing failed');
+      }
+    }
+
+    onProgress?.('📱 Publishing Reel to Instagram...');
+    const publishRes = await fetch(`https://graph.facebook.com/v21.0/${igUserId}/media_publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        creation_id: containerId,
+        access_token: accessToken,
+      }),
+    });
+
+    if (!publishRes.ok) {
+      const pErr = await publishRes.text();
+      throw new Error(`Instagram publish failed: ${pErr}`);
+    }
+
+    const pubData = await publishRes.json();
+    const mediaId = pubData.id;
+
+    onProgress?.(`✅ Instagram Reel published! Media ID: ${mediaId}`);
+    return {
+      success: true,
+      mediaId,
+      url: `https://www.instagram.com/reel/${mediaId}/`,
+    };
+  } catch (err) {
+    onProgress?.(`❌ Instagram upload failed: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Publish a single clip to Instagram and update the clip row in SQLite
+ */
+export async function publishClipToInstagram({
+  clipId,
+  userId,
+  jobId,
+  filePath,
+  fileUrl,
+  metadata = {},
+  clip = {},
+  clipIndex = 0,
+  repo,
+  broadcast,
+}) {
+  const pubJob = repo.createPublishJob({
+    userId,
+    clipId,
+    jobId,
+    platform: 'instagram',
+    status: 'publishing',
+    metadataJson: JSON.stringify(metadata),
+  });
+
+  const onProgress = (msg) => {
+    broadcast?.({ type: 'publish_log', clipId, msg });
+  };
+
+  const result = await uploadToInstagram({
+    fileUrl,
+    filePath,
+    metadata,
+    clip,
+    clipIndex,
+    userId,
+    repo,
+    onProgress,
+  });
+
+  if (result.success) {
+    repo.updatePublishJob(pubJob.id, {
+      status: 'published',
+      result_url: result.url,
+      error: null,
+    });
+    repo.updateClip(clipId, {
+      publish_status: 'published',
+      published_at: new Date().toISOString(),
+    });
+  } else {
+    repo.updatePublishJob(pubJob.id, {
+      status: 'failed',
+      error: result.error,
+    });
+    repo.updateClip(clipId, {
+      publish_status: 'failed',
     });
   }
 

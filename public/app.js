@@ -533,34 +533,63 @@ if (els.captionStyleSelect) {
 }
 
 // ─── Video Info Fetch & Workspace ────────────
+const dynamicSourceIconEl = document.getElementById('dynamic-source-icon');
+
+function isYouTubeUrl(url) {
+  return /^https?:\/\/(www\.)?(youtube\.com|youtu\.be|m\.youtube\.com)/i.test(url);
+}
+
+function isInstagramUrl(url) {
+  return /^https?:\/\/(www\.)?(instagram\.com|instagr\.am)\/(?:reel|reels|p|tv)\/([a-zA-Z0-9_-]+)/i.test(url);
+}
+
+function isLocalMediaPath(path) {
+  return /^[a-zA-Z]:[\\/]|^\/|^\.\.?\/|\.(mp4|mov|mkv|webm|m4v)$/i.test(path);
+}
+
+function updateDynamicSourceIcon(url) {
+  if (!dynamicSourceIconEl) return;
+  if (!url) {
+    dynamicSourceIconEl.innerHTML = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 18.333a8.333 8.333 0 1 0 0-16.667 8.333 8.333 0 0 0 0 16.667Z" stroke="currentColor" stroke-width="1.5"/><path d="M8.333 12.5V7.5l4.167 2.5-4.167 2.5Z" fill="currentColor"/></svg>`;
+    return;
+  }
+  if (isYouTubeUrl(url)) {
+    dynamicSourceIconEl.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="#ef4444"><path d="M22.54 6.42a2.78 2.78 0 00-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 00-1.94 2A29.94 29.94 0 001 12a29.94 29.94 0 00.46 5.58 2.78 2.78 0 001.94 2c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 001.94-2A29.94 29.94 0 0023 12a29.94 29.94 0 00-.46-5.58z"/><path d="M9.75 15.02l5.75-3.27-5.75-3.27v6.54z" fill="#ffffff"/></svg>`;
+  } else if (isInstagramUrl(url)) {
+    dynamicSourceIconEl.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="5" stroke="#ec4899" stroke-width="2"/><circle cx="12" cy="12" r="4.5" stroke="#ec4899" stroke-width="2"/><circle cx="17.5" cy="6.5" r="1.5" fill="#ec4899"/></svg>`;
+  } else if (isLocalMediaPath(url)) {
+    dynamicSourceIconEl.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#00f5d4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`;
+  } else {
+    dynamicSourceIconEl.innerHTML = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 18.333a8.333 8.333 0 1 0 0-16.667 8.333 8.333 0 0 0 0 16.667Z" stroke="currentColor" stroke-width="1.5"/><path d="M8.333 12.5V7.5l4.167 2.5-4.167 2.5Z" fill="currentColor"/></svg>`;
+  }
+}
+
 els.sourceInput.addEventListener('input', () => {
   clearTimeout(videoInfoTimeout);
   const url = els.sourceInput.value.trim();
+  updateDynamicSourceIcon(url);
 
-  if (!url || !isYouTubeUrl(url)) {
+  if (!url || (!isYouTubeUrl(url) && !isInstagramUrl(url))) {
     return;
   }
 
   videoInfoTimeout = setTimeout(() => {
     fetchVideoInfo(url);
     showWorkspaceWithEmbed(url);
-  }, 800);
+  }, 750);
 });
 
 // Also handle paste event for instant response
-els.sourceInput.addEventListener('paste', (e) => {
+els.sourceInput.addEventListener('paste', () => {
   setTimeout(() => {
     const url = els.sourceInput.value.trim();
-    if (url && isYouTubeUrl(url)) {
+    updateDynamicSourceIcon(url);
+    if (url && (isYouTubeUrl(url) || isInstagramUrl(url))) {
       fetchVideoInfo(url);
       showWorkspaceWithEmbed(url);
     }
   }, 100);
 });
-
-function isYouTubeUrl(url) {
-  return /^https?:\/\/(www\.)?(youtube\.com|youtu\.be|m\.youtube\.com)/.test(url);
-}
 
 function extractYouTubeVideoId(url) {
   const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([a-zA-Z0-9_-]{11})/);
@@ -577,6 +606,22 @@ function showWorkspaceWithEmbed(url) {
     els.workspaceLocalVideo.style.display = 'none';
     els.workspaceYtIframe.src = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=0&rel=0&modestbranding=1`;
     els.workspaceYtIframe.style.display = 'block';
+  } else if (isInstagramUrl(url)) {
+    // Show Instagram Reel visual placeholder
+    els.workspaceYtIframe.style.display = 'none';
+    els.workspaceYtIframe.src = '';
+    els.workspaceLocalVideo.style.display = 'none';
+    els.workspaceVideoPlaceholder.style.display = 'flex';
+    const match = url.match(/(?:reel|reels|p|tv)\/([a-zA-Z0-9_-]+)/i);
+    const shortcode = match ? match[1] : '';
+    els.workspaceVideoPlaceholder.innerHTML = `
+      <div style="text-align:center;padding:24px;max-width:320px">
+        <div style="font-size:2.8rem;margin-bottom:8px">🟣</div>
+        <div style="font-weight:700;font-size:1.05rem;color:var(--text-primary);margin-bottom:4px">Instagram Media Detected</div>
+        <div style="font-size:0.8rem;color:var(--text-muted);font-family:var(--font-mono);margin-bottom:12px">Shortcode: ${escapeHtml(shortcode)}</div>
+        <div style="font-size:0.75rem;color:#00f5d4;background:rgba(0,245,212,0.08);padding:6px 12px;border-radius:16px;border:1px solid rgba(0,245,212,0.2)">✓ Ready to download &amp; process with Whisper</div>
+      </div>
+    `;
   }
 }
 
@@ -1175,10 +1220,20 @@ async function publishSingleClip(index, platform) {
       }
     };
 
+    const metadata = platform === 'instagram' ? workflow.instagram : workflow.youtube;
     const res = await fetch('/api/publish-clip', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clip, fileUrl, platform, workflow }),
+      body: JSON.stringify({
+        jobId: currentJobId || clip.job_id,
+        clipId: clip.id,
+        clipIndex: index,
+        platform,
+        metadata,
+        clip,
+        fileUrl,
+        workflow
+      }),
     });
     const data = await res.json();
     if (!data.success) {
@@ -2372,6 +2427,16 @@ function updateEditorLabels() {
   const panX = currentClipData.panX ?? 0;
   const panY = currentClipData.panY ?? 0;
   els.editorVideo.style.transform = `translate(-50%, -50%) translate(${panX}px, ${panY}px) scale(${zoom})`;
+
+  // Synchronize quick zoom preset chips
+  document.querySelectorAll('.btn-zoom-chip').forEach(c => {
+    const cVal = parseFloat(c.dataset.zoom);
+    if (Math.abs(cVal - zoom) < 0.08) {
+      c.classList.add('active');
+    } else {
+      c.classList.remove('active');
+    }
+  });
 }
 
 // Drag logic for Canvas Video
@@ -4528,3 +4593,94 @@ if (viralityTipsToggle && viralityTipsContent) {
     }
   });
 }
+
+// ─── Multi-User Auth Session Management (Header Pill & Login/Logout) ─────────
+let currentAuthUser = null;
+
+async function initAuthSession() {
+  const pill = document.getElementById('header-user-pill');
+  const loginBtn = document.getElementById('btn-header-login');
+  const emailEl = document.getElementById('header-user-email');
+  const planEl = document.getElementById('header-user-plan');
+
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.user) {
+        currentAuthUser = data.user;
+        if (emailEl) emailEl.textContent = data.user.email;
+        if (planEl) {
+          planEl.textContent = (data.user.plan || 'FREE').toUpperCase();
+          planEl.className = `user-plan-badge ${data.user.plan === 'paid' ? 'pro' : 'free'}`;
+        }
+        if (pill) pill.style.display = 'inline-flex';
+        if (loginBtn) loginBtn.style.display = 'none';
+        return;
+      }
+    }
+  } catch (err) {
+    // Unauthenticated or network error
+  }
+
+  currentAuthUser = null;
+  if (pill) pill.style.display = 'none';
+  if (loginBtn) loginBtn.style.display = 'inline-flex';
+}
+
+document.getElementById('btn-header-logout')?.addEventListener('click', async (e) => {
+  e.preventDefault();
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    showToast('Logged out of your account', 'info');
+    setTimeout(() => {
+      window.location.href = '/login.html';
+    }, 400);
+  } catch (err) {
+    showToast('Failed to log out: ' + err.message, 'error');
+  }
+});
+
+// ─── Platform Tabs Selector (All / YouTube / Instagram / Local) ──────────────
+const sourceTabs = document.querySelectorAll('.source-tab');
+if (sourceTabs.length > 0) {
+  sourceTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      sourceTabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const platform = tab.dataset.platform;
+      if (platform === 'youtube') {
+        els.sourceInput.placeholder = 'Paste YouTube video or Shorts link (e.g. https://youtube.com/watch?v=...)...';
+        updateDynamicSourceIcon('https://youtube.com/watch?v=sample');
+      } else if (platform === 'instagram') {
+        els.sourceInput.placeholder = 'Paste Instagram Reel or Post link (e.g. https://instagram.com/reel/...)...';
+        updateDynamicSourceIcon('https://instagram.com/reel/sample');
+      } else if (platform === 'local') {
+        els.sourceInput.placeholder = 'Enter local video path (e.g. C:/videos/clip.mp4)...';
+        updateDynamicSourceIcon('C:/videos/clip.mp4');
+      } else {
+        els.sourceInput.placeholder = 'Paste YouTube link, Instagram Reel/post, or video path here...';
+        updateDynamicSourceIcon(els.sourceInput.value);
+      }
+      els.sourceInput.focus();
+    });
+  });
+}
+
+// ─── Viewfinder Quick Zoom Chips (0.5x, 1.0x, 1.5x, 2.0x, 3.0x) ──────────────
+document.querySelectorAll('.btn-zoom-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const zoomVal = parseFloat(chip.dataset.zoom);
+    if (isNaN(zoomVal)) return;
+    if (els.editorZoom) {
+      els.editorZoom.value = zoomVal;
+      if (els.editorValZoom) els.editorValZoom.textContent = `${zoomVal.toFixed(1)}x`;
+      els.editorZoom.dispatchEvent(new Event('input'));
+    }
+    document.querySelectorAll('.btn-zoom-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+  });
+});
+
+// Initialize user authentication session
+initAuthSession();

@@ -348,7 +348,7 @@ const INSTAGRAM_SCOPES = [
 ].join(',');
 
 export function isInstagramEnabled() {
-  return process.env.FEATURE_INSTAGRAM === 'true';
+  return process.env.FEATURE_INSTAGRAM !== 'false';
 }
 
 export function getInstagramAuthUrl(redirectUri) {
