@@ -1,20 +1,22 @@
 // =============================================
 // SKATE — Social Media Uploader
+// Multi-user, Resumable Chunked YouTube Uploader
 // =============================================
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
-import { getYouTubeToken, getInstagramToken } from './auth.js';
+import { getValidYouTubeToken, refreshYouTubeToken, getStoredYouTubeToken, isInstagramEnabled, getInstagramAuthUrl, exchangeInstagramCode } from './auth.js';
+import { checkQuotaBeforeUpload, consumeQuota, getQuotaStatus } from './services/youtube_quota.js';
 
-// ─── Template Variable Substitution ──────────
+const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB (32 * 256 KB)
+const MAX_CHUNK_RETRIES = 3;
 
 /**
  * Replace template variables in user-configured text
  * Supports: {title}, {description}, {hashtags}, {caption}, {clipNum}
  */
-function applyTemplate(template, clip, clipIndex) {
-  if (!template) return '';
+export function applyTemplate(template, clip = {}, clipIndex = 0) {
+  if (typeof template !== 'string' || !template) return '';
   return template
     .replace(/\{title\}/gi, clip.title || '')
     .replace(/\{description\}/gi, clip.description || '')
@@ -23,481 +25,435 @@ function applyTemplate(template, clip, clipIndex) {
     .replace(/\{clipNum\}/gi, String(clipIndex + 1));
 }
 
-// ─── YouTube Daily Upload Quota Tracker ──────
-// YouTube Data API v3 costs 1,600 units per upload.
-// The daily quota is 10,000 units, so max ~6 uploads per day.
-
-const YOUTUBE_DAILY_QUOTA = 10000;
-const YOUTUBE_UPLOAD_COST = 1600;
-const MAX_UPLOADS_PER_DAY = Math.floor(YOUTUBE_DAILY_QUOTA / YOUTUBE_UPLOAD_COST); // = 6
-
-const QUOTA_FILE = path.join(os.homedir(), '.skate', 'yt_quota.json');
-
-function getTodayKey() {
-  // YouTube quota resets at midnight Pacific Time (UTC-8 / UTC-7 DST)
-  const now = new Date();
-  const pacific = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
-  return `${pacific.getFullYear()}-${String(pacific.getMonth() + 1).padStart(2, '0')}-${String(pacific.getDate()).padStart(2, '0')}`;
-}
-
-function loadQuotaData() {
-  try {
-    if (fs.existsSync(QUOTA_FILE)) {
-      return JSON.parse(fs.readFileSync(QUOTA_FILE, 'utf8'));
-    }
-  } catch (e) { /* ignore */ }
-  return {};
-}
-
-function saveQuotaData(data) {
-  try {
-    fs.mkdirSync(path.dirname(QUOTA_FILE), { recursive: true });
-    fs.writeFileSync(QUOTA_FILE, JSON.stringify(data, null, 2), 'utf8');
-  } catch (e) { /* ignore */ }
-}
-
 /**
- * Get today's YouTube upload stats (pacific time reset)
- * @returns {{ uploadsToday: number, unitsUsed: number, unitsRemaining: number, maxUploads: number, resetKey: string }}
+ * Format title, description, and tags adhering strictly to YouTube limits
+ * Does NOT force #Shorts to title limit; appends to description if missing.
  */
-export function getYouTubeQuotaStatus() {
-  const data = loadQuotaData();
-  const today = getTodayKey();
-  const uploadsToday = data[today] || 0;
-  const unitsUsed = uploadsToday * YOUTUBE_UPLOAD_COST;
+export function formatYouTubeMetadata(metadata = {}, clip = {}, clipIndex = 0) {
+  let title = (typeof metadata.title === 'string' ? applyTemplate(metadata.title, clip, clipIndex) : null) || clip.title || `Clip ${clipIndex + 1}`;
+  let description = (typeof metadata.description === 'string' ? applyTemplate(metadata.description, clip, clipIndex) : null) || clip.description || (clip.caption ? `${clip.caption}\n\n${clip.hashtags || ''}` : '');
+  let rawTags = metadata.tags;
+  if (typeof rawTags === 'string') {
+    rawTags = applyTemplate(rawTags, clip, clipIndex);
+  } else if (!rawTags) {
+    rawTags = clip.hashtags || '';
+  }
+
+  // Title: max 100 characters
+  title = title.trim();
+  if (title.length > 100) {
+    title = title.slice(0, 100);
+  }
+
+  // Ensure #Shorts is present in description if missing
+  const hasShortsInTitle = /#shorts\b/i.test(title);
+  const hasShortsInDesc = /#shorts\b/i.test(description);
+  if (!hasShortsInTitle && !hasShortsInDesc) {
+    description = description ? `${description}\n\n#Shorts` : '#Shorts';
+  }
+
+  // Description: max 5000 characters
+  if (description.length > 5000) {
+    description = description.slice(0, 5000);
+  }
+
+  // Tags: total combined length under 500 chars
+  let tags = [];
+  if (Array.isArray(rawTags)) {
+    tags = rawTags.map(t => String(t).trim()).filter(Boolean);
+  } else if (typeof rawTags === 'string') {
+    tags = rawTags.replace(/#/g, '').split(/[,\s]+/).map(t => t.trim()).filter(Boolean);
+  }
+  if (tags.length === 0) {
+    tags = ['shorts', 'viral'];
+  }
+
+  // Filter tags to stay under 500 chars total
+  const validTags = [];
+  let currentTagsLength = 0;
+  for (const tag of tags) {
+    if (currentTagsLength + tag.length + 1 <= 500) {
+      validTags.push(tag);
+      currentTagsLength += tag.length + 1;
+    }
+  }
+
+  const categoryId = metadata.categoryId || '22'; // People & Blogs
+  const privacyStatus = metadata.visibility || process.env.YT_DEFAULT_PRIVACY || 'private';
+  const selfDeclaredMadeForKids = Boolean(metadata.audience === 'kids' || metadata.selfDeclaredMadeForKids);
+
   return {
-    uploadsToday,
-    unitsUsed,
-    unitsRemaining: Math.max(0, YOUTUBE_DAILY_QUOTA - unitsUsed),
-    maxUploads: MAX_UPLOADS_PER_DAY,
-    resetKey: today,
-    isAtLimit: uploadsToday >= MAX_UPLOADS_PER_DAY,
+    title,
+    description,
+    tags: validTags,
+    categoryId,
+    privacyStatus,
+    selfDeclaredMadeForKids,
   };
 }
 
-function incrementYouTubeUploadCount() {
-  const data = loadQuotaData();
-  const today = getTodayKey();
-  data[today] = (data[today] || 0) + 1;
-  // Clean old keys (keep only last 7 days)
-  const keys = Object.keys(data).sort().reverse();
-  if (keys.length > 7) {
-    keys.slice(7).forEach(k => delete data[k]);
-  }
-  saveQuotaData(data);
-  return data[today];
-}
-
-// ─── YouTube Shorts Upload ───────────────────
-
 /**
- * Upload a video to YouTube as a Short
- * Uses YouTube Data API v3 resumable upload
- *
- * @param {string} filePath - Absolute path to the .mp4 file
- * @param {Object} metadata - { title, description, tags, audience, visibility }
- * @param {Object} clip - Clip data with AI-generated social content
- * @param {number} clipIndex - Clip index for template substitution
- * @param {Function} onProgress - Progress callback
- * @returns {Object} { success, videoId, url, error }
+ * Resumable Chunked Upload to YouTube
+ * Streams from disk in 8MB chunks without loading whole file into memory.
+ * 
+ * @param {Object} options
+ * @param {string} options.filePath - Path to mp4 file
+ * @param {Object} options.metadata - { title, description, tags, categoryId, visibility, audience }
+ * @param {Object} [options.clip] - Clip metadata
+ * @param {number} [options.clipIndex] - Index
+ * @param {string} options.userId - User ID
+ * @param {string} [options.userPlan] - 'free' or 'paid'
+ * @param {Object} options.repo - Database repository
+ * @param {Function} [options.onProgress] - Progress callback
+ * @returns {Promise<Object>}
  */
-export async function uploadToYouTube(filePath, metadata, clip, clipIndex, onProgress) {
-  const accessToken = await getYouTubeToken();
-  if (!accessToken) {
-    return { success: false, error: 'YouTube not connected or token expired. Please reconnect.' };
+export async function uploadToYouTube({
+  filePath,
+  metadata = {},
+  clip = {},
+  clipIndex = 0,
+  userId,
+  userPlan = 'free',
+  repo,
+  onProgress,
+}) {
+  if (!userId || !repo) {
+    return { success: false, error: 'User ID and repository required for YouTube upload' };
   }
 
-  // ─── Daily Quota Pre-Check ─────────────────
-  const quotaStatus = getYouTubeQuotaStatus();
-  if (quotaStatus.isAtLimit) {
-    const msg = `YouTube daily upload limit reached (${quotaStatus.uploadsToday}/${quotaStatus.maxUploads} uploads used today). Quota resets at midnight Pacific Time.`;
-    onProgress?.(`⛔ ${msg}`);
-    return { success: false, error: msg, quotaExceeded: true };
-  }
-
-  onProgress?.(`📊 YouTube quota: ${quotaStatus.uploadsToday}/${quotaStatus.maxUploads} uploads used today (${quotaStatus.unitsRemaining} units remaining)`);
-
-  try {
-    // Resolve file path (support both absolute and relative paths)
-    let resolvedPath = filePath;
-    if (!path.isAbsolute(filePath)) {
-      resolvedPath = path.resolve(filePath);
-    }
-
-    // Verify file exists before attempting upload
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error(`Video file not found at: ${resolvedPath}`);
-    }
-
-    // Apply templates with safe defaults
-    const meta = metadata || {};
-    let title = (meta.title ? applyTemplate(meta.title, clip, clipIndex) : null) || clip.title || `Clip ${clipIndex + 1}`;
-    let description = (meta.description ? applyTemplate(meta.description, clip, clipIndex) : null) || clip.description || (clip.caption ? `${clip.caption}\n\n${clip.hashtags || ''}` : '');
-    const tagsStr = (meta.tags ? applyTemplate(meta.tags, clip, clipIndex) : null) || clip.hashtags || '';
-    const tags = tagsStr.replace(/#/g, '').split(/[,\s]+/).map(t => t.trim()).filter(Boolean);
-
-    // Ensure #Shorts is in the title for YouTube Shorts
-    if (!title.toLowerCase().includes('#shorts')) {
-      title = `${title} #Shorts`;
-    }
-
-    // Ensure title is within limits (trim BEFORE adding #Shorts to avoid exceeding 100)
-    const baseTitle = title.replace(/ #Shorts$/i, '').slice(0, 85);
-    title = baseTitle.toLowerCase().includes('#shorts') ? baseTitle : `${baseTitle} #Shorts`;
-    description = description.slice(0, 5000);
-
-    const madeForKids = meta.audience === 'kids';
-    const privacyStatus = meta.visibility || 'public';
-
-    const fileBuffer = fs.readFileSync(resolvedPath);
-    const fileSize = fileBuffer.length;
-
-    // Step 1: Initialize resumable upload
-    onProgress?.(`📤 Initializing YouTube upload for clip ${clipIndex + 1}...`);
-
-    const videoMetadata = {
-      snippet: {
-        title,
-        description,
-        tags: tags.length > 0 ? tags : ['shorts', 'viral'],
-        categoryId: '22', // People & Blogs
-      },
-      status: {
-        privacyStatus,
-        selfDeclaredMadeForKids: madeForKids,
-      },
+  // 1. Quota Pre-Check
+  const quotaCheck = checkQuotaBeforeUpload({ repo, userId, plan: userPlan });
+  if (!quotaCheck.allowed) {
+    onProgress?.(`⛔ ${quotaCheck.error}`);
+    return {
+      success: false,
+      error: quotaCheck.error,
+      reason: quotaCheck.reason,
+      status: quotaCheck.status,
+      nextResetTime: quotaCheck.nextResetTime,
+      quotaExceeded: quotaCheck.reason === 'APP_QUOTA_EXCEEDED',
+      userLimitExceeded: quotaCheck.reason === 'USER_LIMIT_EXCEEDED',
     };
+  }
 
-    const initRes = await fetch(
-      'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json; charset=UTF-8',
-          'X-Upload-Content-Type': 'video/mp4',
-          'X-Upload-Content-Length': fileSize.toString(),
-        },
-        body: JSON.stringify(videoMetadata),
-      }
-    );
+  // 2. Token Check & Refresh
+  let accessToken = await getValidYouTubeToken(userId, repo);
+  if (!accessToken) {
+    return {
+      success: false,
+      error: 'YouTube not connected or token expired. Please reconnect.',
+      needsReconnect: true,
+    };
+  }
 
-    if (!initRes.ok) {
-      const errText = await initRes.text();
-      // Check for quota exceeded specifically
-      if (initRes.status === 403 && (errText.includes('quotaExceeded') || errText.includes('forbidden'))) {
-        const msg = `YouTube API daily quota exceeded. You have used all 10,000 units for today. Quota resets at midnight Pacific Time.`;
-        onProgress?.(`⛔ ${msg}`);
-        return { success: false, error: msg, quotaExceeded: true };
-      }
-      throw new Error(`YouTube upload init failed: ${errText}`);
-    }
+  // 3. File existence & size check
+  let resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(filePath);
+  if (!fs.existsSync(resolvedPath)) {
+    return { success: false, error: `Video file not found at: ${resolvedPath}` };
+  }
+  const stat = fs.statSync(resolvedPath);
+  const fileSize = stat.size;
+  if (fileSize === 0) {
+    return { success: false, error: 'Video file is empty (0 bytes)' };
+  }
 
-    const uploadUrl = initRes.headers.get('location');
-    if (!uploadUrl) throw new Error('No upload URL returned from YouTube');
+  // 4. Format metadata
+  const formatted = formatYouTubeMetadata(metadata, clip, clipIndex);
 
-    // Step 2: Upload the video file (using Buffer for 100% reliable PUT transfer)
-    onProgress?.(`⬆️  Uploading video to YouTube (${(fileSize / 1024 / 1024).toFixed(1)} MB)...`);
+  const videoResource = {
+    snippet: {
+      title: formatted.title,
+      description: formatted.description,
+      tags: formatted.tags,
+      categoryId: formatted.categoryId,
+    },
+    status: {
+      privacyStatus: formatted.privacyStatus,
+      selfDeclaredMadeForKids: formatted.selfDeclaredMadeForKids,
+    },
+  };
 
-    const uploadRes = await fetch(uploadUrl, {
-      method: 'PUT',
+  const uploadEndpoint = process.env.GOOGLE_UPLOAD_URL || 'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status';
+
+  // 5. Initiate Resumable Session with Retry for 401
+  onProgress?.(`📤 Initializing resumable YouTube upload for "${formatted.title}"...`);
+
+  async function initiateSession(token) {
+    return await fetch(uploadEndpoint, {
+      method: 'POST',
       headers: {
-        'Content-Type': 'video/mp4',
-        'Content-Length': fileSize.toString(),
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': 'video/mp4',
+        'X-Upload-Content-Length': String(fileSize),
       },
-      body: fileBuffer,
+      body: JSON.stringify(videoResource),
     });
+  }
 
-    if (!uploadRes.ok) {
-      const errText = await uploadRes.text();
-      if (uploadRes.status === 403 && errText.includes('quotaExceeded')) {
+  let initRes = await initiateSession(accessToken);
+
+  if (initRes.status === 401) {
+    onProgress?.('🔄 Access token expired during init, refreshing...');
+    try {
+      accessToken = await refreshYouTubeToken(userId, repo);
+      initRes = await initiateSession(accessToken);
+    } catch (e) {
+      return { success: false, error: `Failed to refresh token: ${e.message}`, needsReconnect: true };
+    }
+  }
+
+  if (!initRes.ok) {
+    const errText = await initRes.text();
+    if (initRes.status === 403) {
+      if (errText.includes('quotaExceeded')) {
         return {
           success: false,
           error: 'YouTube API daily quota exceeded. Resets at midnight Pacific Time.',
           quotaExceeded: true,
+          status: 'waiting-for-quota',
         };
       }
-      throw new Error(`YouTube upload failed: ${errText}`);
+      if (errText.includes('uploadLimitExceeded')) {
+        return {
+          success: false,
+          error: 'YouTube upload limit exceeded for this channel today.',
+          uploadLimitExceeded: true,
+          status: 'failed',
+        };
+      }
+      if (errText.includes('forbidden')) {
+        return { success: false, error: `YouTube API forbidden: ${errText}`, status: 'failed' };
+      }
     }
-
-    const uploadData = await uploadRes.json();
-    const videoId = uploadData.id;
-
-    // ─── Track successful upload ───────────
-    const totalToday = incrementYouTubeUploadCount();
-    const remaining = MAX_UPLOADS_PER_DAY - totalToday;
-    onProgress?.(`✅ YouTube upload complete! Video ID: ${videoId}`);
-    onProgress?.(`📊 Daily uploads: ${totalToday}/${MAX_UPLOADS_PER_DAY} used. ${remaining} upload${remaining !== 1 ? 's' : ''} remaining today.`);
-
-    return {
-      success: true,
-      videoId,
-      url: `https://youtube.com/shorts/${videoId}`,
-      quotaStatus: getYouTubeQuotaStatus(),
-    };
-  } catch (err) {
-    onProgress?.(`❌ YouTube upload failed: ${err.message}`);
-    return { success: false, error: err.message };
-  }
-}
-
-// ─── Instagram Reels Upload ──────────────────
-
-/**
- * Upload a video to Instagram as a Reel
- * Uses Instagram Graph API media container workflow
- *
- * @param {string} fileUrl - Public URL of the video (must be accessible from Meta servers)
- * @param {Object} metadata - { caption, hashtags }
- * @param {Object} clip - Clip data with AI-generated social content
- * @param {number} clipIndex - Clip index for template substitution
- * @param {Function} onProgress - Progress callback
- * @returns {Object} { success, mediaId, url, error }
- */
-export async function uploadToInstagram(fileUrl, metadata, clip, clipIndex, onProgress) {
-  const igAuth = getInstagramToken();
-  if (!igAuth) {
-    return { success: false, error: 'Instagram not connected or token expired. Please reconnect.' };
+    return { success: false, error: `YouTube upload initialization failed (${initRes.status}): ${errText}` };
   }
 
-  // ─── Localhost Detection ──────────────────
-  // Instagram Graph API requires a publicly accessible URL.
-  // localhost/127.0.0.1 will always fail.
-  if (fileUrl.includes('localhost') || fileUrl.includes('127.0.0.1')) {
-    const msg = 'Instagram requires a public URL for video uploads. localhost is not accessible from Meta servers. Use a tunnel (ngrok, Cloudflare Tunnel) to expose your local server to the internet.';
-    onProgress?.(`⚠️  ${msg}`);
-    return { success: false, error: msg, localUrlError: true };
+  const uploadUrl = initRes.headers.get('location');
+  if (!uploadUrl) {
+    return { success: false, error: 'No resumable upload Location header received from YouTube' };
   }
 
-  // ─── Business Account Check ───────────────
-  if (!igAuth.igUserId) {
-    const msg = 'Instagram Business/Creator Account not found. Your Instagram account must be a Business or Creator account linked to a Facebook Page. Personal accounts cannot publish via API.';
-    onProgress?.(`⛔ ${msg}`);
-    return { success: false, error: msg, noBusinessAccount: true };
-  }
+  // 6. Resumable Chunk Upload Loop
+  let startByte = 0;
+  let uploadResult = null;
+  const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
 
-  const { accessToken, igUserId } = igAuth;
+  onProgress?.(`⬆️  Uploading ${Math.round(fileSize / 1024 / 1024 * 10) / 10} MB in ${totalChunks} chunks...`);
+
+  const fd = fs.openSync(resolvedPath, 'r');
 
   try {
-    // Build caption from template
-    let caption = applyTemplate(metadata.caption, clip, clipIndex) || clip.caption || '';
-    const extraHashtags = applyTemplate(metadata.hashtags, clip, clipIndex) || '';
+    while (startByte < fileSize) {
+      const endByte = Math.min(startByte + CHUNK_SIZE - 1, fileSize - 1);
+      const chunkLength = endByte - startByte + 1;
+      const currentChunkIdx = Math.floor(startByte / CHUNK_SIZE) + 1;
 
-    if (extraHashtags) {
-      caption = `${caption}\n\n${extraHashtags}`;
-    }
+      // Allocate only the 8MB slice buffer for this chunk
+      const chunkBuffer = Buffer.alloc(chunkLength);
+      fs.readSync(fd, chunkBuffer, 0, chunkLength, startByte);
 
-    // Add clip hashtags if not already present
-    if (clip.hashtags && !caption.includes(clip.hashtags)) {
-      caption = `${caption}\n${clip.hashtags}`;
-    }
+      let chunkSuccess = false;
+      let chunkAttempt = 0;
 
-    caption = caption.slice(0, 2200); // Instagram caption limit
+      while (!chunkSuccess && chunkAttempt < MAX_CHUNK_RETRIES) {
+        chunkAttempt++;
+        try {
+          const chunkRes = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'video/mp4',
+              'Content-Length': String(chunkLength),
+              'Content-Range': `bytes ${startByte}-${endByte}/${fileSize}`,
+            },
+            body: chunkBuffer,
+          });
 
-    // Step 1: Create media container
-    onProgress?.(`📤 Creating Instagram Reel container for clip ${clipIndex + 1}...`);
+          if (chunkRes.status === 308) {
+            // Chunk accepted, upload incomplete
+            chunkSuccess = true;
+            const rangeHeader = chunkRes.headers.get('range');
+            if (rangeHeader) {
+              const match = rangeHeader.match(/bytes=0-(\d+)/);
+              if (match) {
+                startByte = parseInt(match[1], 10) + 1;
+              } else {
+                startByte = endByte + 1;
+              }
+            } else {
+              startByte = endByte + 1;
+            }
+            const pct = Math.round((startByte / fileSize) * 100);
+            onProgress?.(`   Chunk ${currentChunkIdx}/${totalChunks} uploaded (${pct}%)`);
+          } else if (chunkRes.status === 200 || chunkRes.status === 201) {
+            // Upload complete!
+            chunkSuccess = true;
+            uploadResult = await chunkRes.json();
+            startByte = fileSize;
+          } else if (chunkRes.status === 401 && chunkAttempt === 1) {
+            // Try refresh once
+            try {
+              accessToken = await refreshYouTubeToken(userId, repo);
+            } catch (e) {
+              throw new Error(`Token refresh failed mid-upload: ${e.message}`);
+            }
+          } else if (chunkRes.status === 403) {
+            const errText = await chunkRes.text();
+            if (errText.includes('quotaExceeded')) {
+              return { success: false, error: 'YouTube API quota exceeded mid-upload', quotaExceeded: true, status: 'waiting-for-quota' };
+            }
+            if (errText.includes('uploadLimitExceeded')) {
+              return { success: false, error: 'YouTube upload limit exceeded', uploadLimitExceeded: true, status: 'failed' };
+            }
+            throw new Error(`YouTube chunk upload forbidden: ${errText}`);
+          } else {
+            const errText = await chunkRes.text();
+            throw new Error(`Unexpected status ${chunkRes.status}: ${errText}`);
+          }
+        } catch (netErr) {
+          onProgress?.(`⚠️  Chunk ${currentChunkIdx} attempt ${chunkAttempt} failed: ${netErr.message}. Querying resume status...`);
 
-    const containerUrl = `https://graph.facebook.com/v21.0/${igUserId}/media`;
-    const containerRes = await fetch(containerUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        media_type: 'REELS',
-        video_url: fileUrl,
-        caption,
-        access_token: accessToken,
-      }),
-    });
+          // Attempt recovery: Query Google for upload status (308 Range check)
+          try {
+            const statusCheckRes = await fetch(uploadUrl, {
+              method: 'PUT',
+              headers: {
+                'Content-Range': `bytes */${fileSize}`,
+                'Content-Length': '0',
+              },
+            });
 
-    if (!containerRes.ok) {
-      const err = await containerRes.text();
-      throw new Error(`IG container creation failed: ${err}`);
-    }
+            if (statusCheckRes.status === 308) {
+              const rangeHeader = statusCheckRes.headers.get('range');
+              if (rangeHeader) {
+                const match = rangeHeader.match(/bytes=0-(\d+)/);
+                if (match) {
+                  startByte = parseInt(match[1], 10) + 1;
+                  chunkSuccess = true; // Resumed from recovered byte offset
+                  break;
+                }
+              }
+            } else if (statusCheckRes.status === 200 || statusCheckRes.status === 201) {
+              uploadResult = await statusCheckRes.json();
+              startByte = fileSize;
+              chunkSuccess = true;
+              break;
+            }
+          } catch (statusErr) {
+            // Wait briefly before next attempt
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, chunkAttempt)));
+          }
 
-    const containerData = await containerRes.json();
-    const containerId = containerData.id;
-
-    // Step 2: Poll for container to be ready
-    onProgress?.(`⏳ Waiting for Instagram to process video...`);
-
-    let status = 'IN_PROGRESS';
-    let attempts = 0;
-    const maxAttempts = 60; // ~5 minutes with 5s intervals
-
-    while (status === 'IN_PROGRESS' && attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      attempts++;
-
-      const statusRes = await fetch(
-        `https://graph.facebook.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`
-      );
-
-      if (statusRes.ok) {
-        const statusData = await statusRes.json();
-        status = statusData.status_code;
-
-        if (status === 'ERROR') {
-          throw new Error('Instagram media processing failed');
+          if (chunkAttempt >= MAX_CHUNK_RETRIES) {
+            throw new Error(`Upload failed after ${MAX_CHUNK_RETRIES} attempts on chunk ${currentChunkIdx}: ${netErr.message}`);
+          }
         }
       }
-
-      if (attempts % 6 === 0) {
-        onProgress?.(`   Still processing... (${attempts * 5}s elapsed)`);
-      }
     }
-
-    if (status !== 'FINISHED') {
-      throw new Error(`Instagram processing timeout after ${maxAttempts * 5}s`);
-    }
-
-    // Step 3: Publish the container
-    onProgress?.(`📱 Publishing Reel to Instagram...`);
-
-    const publishRes = await fetch(
-      `https://graph.facebook.com/v21.0/${igUserId}/media_publish`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          creation_id: containerId,
-          access_token: accessToken,
-        }),
-      }
-    );
-
-    if (!publishRes.ok) {
-      const err = await publishRes.text();
-      throw new Error(`IG publish failed: ${err}`);
-    }
-
-    const publishData = await publishRes.json();
-    const mediaId = publishData.id;
-
-    onProgress?.(`✅ Instagram Reel published! Media ID: ${mediaId}`);
-
-    return {
-      success: true,
-      mediaId,
-      url: `https://www.instagram.com/reel/${mediaId}/`,
-    };
-  } catch (err) {
-    onProgress?.(`❌ Instagram upload failed: ${err.message}`);
-    return { success: false, error: err.message };
+  } finally {
+    fs.closeSync(fd);
   }
+
+  if (!uploadResult || !uploadResult.id) {
+    return { success: false, error: 'Upload completed but no video ID received from YouTube' };
+  }
+
+  // 7. Consume Quota & Update Database
+  consumeQuota(repo, userId);
+
+  const videoId = uploadResult.id;
+  const returnedPrivacyStatus = uploadResult.status?.privacyStatus || formatted.privacyStatus;
+  const videoUrl = `https://youtube.com/shorts/${videoId}`;
+
+  onProgress?.(`✅ YouTube Short published! Video ID: ${videoId} (Privacy: ${returnedPrivacyStatus})`);
+
+  return {
+    success: true,
+    videoId,
+    url: videoUrl,
+    privacyStatus: returnedPrivacyStatus,
+    quotaStatus: getQuotaStatus(repo, userId, userPlan),
+  };
 }
 
-// ─── Publish Clips to All Platforms ──────────
-
 /**
- * Publish multiple clips to connected platforms
- *
- * @param {Array} clips - Array of clip data with social content
- * @param {Array} files - Array of file paths/URLs for rendered clips
- * @param {Object} workflow - { instagram: { caption, hashtags }, youtube: { title, description, tags, audience, visibility } }
- * @param {string} rootDir - Project root directory
- * @param {Function} broadcast - WebSocket broadcast function
- * @returns {Object} { results: [...], summary }
+ * Publish a single clip to YouTube and update the clip row in SQLite
+ * @param {Object} params
+ * @param {string} params.clipId
+ * @param {string} params.userId
+ * @param {string} params.jobId
+ * @param {string} params.filePath
+ * @param {Object} params.metadata
+ * @param {Object} params.clip
+ * @param {number} [params.clipIndex]
+ * @param {Object} params.repo
+ * @param {Function} [params.broadcast]
+ * @returns {Promise<Object>}
  */
-export async function publishClips(clips, files, workflow, rootDir, broadcast) {
-  const results = [];
-  const totalClips = clips.length;
-  let successCount = 0;
+export async function publishClipToYouTube({
+  clipId,
+  userId,
+  jobId,
+  filePath,
+  metadata = {},
+  clip = {},
+  clipIndex = 0,
+  repo,
+  broadcast,
+}) {
+  const user = repo.getUserById(userId);
+  const userPlan = user?.plan || 'free';
 
-  broadcast({ type: 'log', level: 'info', msg: `📤 Starting publish: ${totalClips} clips` });
+  // Create or record publish job in DB
+  const pubJob = repo.createPublishJob({
+    userId,
+    clipId,
+    jobId,
+    platform: 'youtube',
+    status: 'publishing',
+    metadataJson: JSON.stringify(metadata),
+  });
 
-  for (let i = 0; i < totalClips; i++) {
-    const clip = clips[i];
-    const fileRelativePath = files[i];
+  const onProgress = (msg) => {
+    broadcast?.({ type: 'publish_log', clipId, msg });
+  };
 
-    broadcast({
-      type: 'publish_progress',
-      clipIndex: i,
-      total: totalClips,
-      status: 'uploading',
+  const result = await uploadToYouTube({
+    filePath,
+    metadata,
+    clip,
+    clipIndex,
+    userId,
+    userPlan,
+    repo,
+    onProgress,
+  });
+
+  if (result.success) {
+    repo.updatePublishJob(pubJob.id, {
+      status: 'published',
+      result_url: result.url,
+      error: null,
     });
-
-    const clipResult = { clipIndex: i, youtube: null, instagram: null };
-
-    // ─── YouTube Upload ─────────────────────
-    if (workflow.youtube) {
-      let filePath = path.isAbsolute(fileRelativePath)
-        ? fileRelativePath
-        : path.join(rootDir, fileRelativePath.replace(/^\//, ''));
-
-      if (!fs.existsSync(filePath)) {
-        // Fallback: check output dir
-        const cleanRel = fileRelativePath.replace(/^\/?(output\/)?/, '');
-        const fallback = path.join(rootDir, 'output', cleanRel);
-        if (fs.existsSync(fallback)) filePath = fallback;
-      }
-
-      if (fs.existsSync(filePath)) {
-        broadcast({ type: 'log', level: 'info', msg: `📺 Uploading clip ${i + 1}/${totalClips} to YouTube...` });
-
-        // Gather fallback metadata from clip if workflow is incomplete
-        const finalMetadata = {
-          title: workflow.youtube.title || clip.title || `Clip ${i + 1}`,
-          description: workflow.youtube.description || clip.description || clip.caption || '',
-          tags: workflow.youtube.tags || clip.hashtags || '',
-          visibility: workflow.youtube.visibility || 'public',
-          audience: workflow.youtube.audience || 'general',
-        };
-
-        clipResult.youtube = await uploadToYouTube(
-          filePath,
-          finalMetadata,
-          clip,
-          i,
-          (msg) => broadcast({ type: 'log', level: 'info', msg: `   ${msg}` })
-        );
-
-        if (clipResult.youtube.success) successCount++;
-      } else {
-        clipResult.youtube = { success: false, error: `File not found: ${filePath}` };
-        broadcast({ type: 'log', level: 'error', msg: `   ❌ File not found: ${filePath}` });
-      }
-    }
-
-    // ─── Instagram Upload ───────────────────
-    if (workflow.instagram) {
-      // Instagram requires a publicly accessible URL
-      // For local files, we'll need the server URL
-      const serverUrl = `http://localhost:${process.env.PORT || 3000}`;
-      const publicUrl = `${serverUrl}${fileRelativePath}`;
-
-      broadcast({ type: 'log', level: 'info', msg: `📱 Uploading clip ${i + 1}/${totalClips} to Instagram...` });
-
-      // Note: Instagram Graph API requires the video to be at a publicly accessible URL
-      // For local development, this won't work unless using a tunnel (ngrok, etc.)
-      clipResult.instagram = await uploadToInstagram(
-        publicUrl,
-        workflow.instagram,
-        clip,
-        i,
-        (msg) => broadcast({ type: 'log', level: 'info', msg: `   ${msg}` })
-      );
-
-      if (clipResult.instagram.success) successCount++;
-    }
-
-    results.push(clipResult);
-
-    broadcast({
-      type: 'publish_progress',
-      clipIndex: i,
-      total: totalClips,
-      status: (clipResult.youtube?.success || clipResult.instagram?.success) ? 'done' : 'error',
-      result: clipResult,
+    repo.updateClip(clipId, {
+      youtube_url: result.url,
+      publish_status: 'published',
+      published_at: new Date().toISOString(),
+    });
+  } else {
+    const newStatus = result.status || (result.quotaExceeded ? 'waiting-for-quota' : 'failed');
+    repo.updatePublishJob(pubJob.id, {
+      status: newStatus,
+      error: result.error,
+      scheduled_for: result.nextResetTime || null,
+    });
+    repo.updateClip(clipId, {
+      publish_status: newStatus,
     });
   }
 
-  const summary = {
-    total: totalClips,
-    success: successCount,
-    failed: (workflow.youtube ? totalClips : 0) + (workflow.instagram ? totalClips : 0) - successCount,
+  return {
+    publishJobId: pubJob.id,
+    ...result,
   };
-
-  broadcast({ type: 'log', level: 'success', msg: `✅ Publishing complete: ${successCount} successful uploads` });
-
-  return { results, summary };
 }

@@ -140,6 +140,35 @@ export function createDbRepository(db) {
     WHERE user_id = ? AND created_at >= ?
   `);
 
+  // YouTube App Quota
+  const getAppQuotaStmt = db.prepare(`SELECT units_used FROM youtube_app_quota WHERE date_key = ?`);
+  const upsertAppQuotaStmt = db.prepare(`
+    INSERT INTO youtube_app_quota (date_key, units_used, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(date_key) DO UPDATE SET units_used = youtube_app_quota.units_used + excluded.units_used, updated_at = excluded.updated_at
+  `);
+  const setAppQuotaStmt = db.prepare(`
+    INSERT INTO youtube_app_quota (date_key, units_used, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(date_key) DO UPDATE SET units_used = excluded.units_used, updated_at = excluded.updated_at
+  `);
+
+  // YouTube User Quota
+  const getUserQuotaStmt = db.prepare(`SELECT uploads_count FROM youtube_user_quota WHERE user_id = ? AND date_key = ?`);
+  const upsertUserQuotaStmt = db.prepare(`
+    INSERT INTO youtube_user_quota (id, user_id, date_key, uploads_count, updated_at)
+    VALUES (?, ?, ?, 1, ?)
+    ON CONFLICT(id) DO UPDATE SET uploads_count = youtube_user_quota.uploads_count + 1, updated_at = excluded.updated_at
+  `);
+
+  // Publish Jobs
+  const insertPublishJobStmt = db.prepare(`
+    INSERT INTO publish_jobs (id, user_id, clip_id, job_id, platform, status, metadata_json, result_url, error, scheduled_for, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const getPublishJobStmt = db.prepare(`SELECT * FROM publish_jobs WHERE id = ? AND user_id = ?`);
+  const listPublishJobsStmt = db.prepare(`SELECT * FROM publish_jobs WHERE user_id = ? ORDER BY created_at DESC`);
+
   function hashToken(raw) {
     return crypto.createHash('sha256').update(raw).digest('hex');
   }
@@ -253,6 +282,94 @@ export function createDbRepository(db) {
 
     getClip(jobId, idx, userId) {
       return getClipStmt.get(jobId, Number(idx), userId) || null;
+    },
+
+    updateClip(id, updates = {}) {
+      const sets = [];
+      const values = [];
+      for (const [k, v] of Object.entries(updates)) {
+        sets.push(`${k} = ?`);
+        values.push(v);
+      }
+      if (sets.length === 0) return;
+      values.push(id);
+      const sql = `UPDATE clips SET ${sets.join(', ')} WHERE id = ?`;
+      return db.prepare(sql).run(...values);
+    },
+
+    // Quotas (App & User)
+    getAppQuota(dateKey) {
+      const row = getAppQuotaStmt.get(dateKey);
+      return row ? row.units_used : 0;
+    },
+
+    incrementAppQuota(dateKey, units = 1600) {
+      const now = new Date().toISOString();
+      upsertAppQuotaStmt.run(dateKey, units, now);
+      return this.getAppQuota(dateKey);
+    },
+
+    setAppQuota(dateKey, units) {
+      const now = new Date().toISOString();
+      setAppQuotaStmt.run(dateKey, units, now);
+      return units;
+    },
+
+    getUserPublishQuota(userId, dateKey) {
+      const row = getUserQuotaStmt.get(userId, dateKey);
+      return row ? row.uploads_count : 0;
+    },
+
+    incrementUserPublishQuota(userId, dateKey) {
+      const id = `${userId}:${dateKey}`;
+      const now = new Date().toISOString();
+      upsertUserQuotaStmt.run(id, userId, dateKey, now);
+      return this.getUserPublishQuota(userId, dateKey);
+    },
+
+    // Publish Jobs
+    createPublishJob({ id, userId, clipId, jobId, platform = 'youtube', status = 'queued', metadataJson = '{}', scheduledFor = null }) {
+      const pubId = id || 'pub_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+      const now = new Date().toISOString();
+      insertPublishJobStmt.run(pubId, userId, clipId, jobId, platform, status, metadataJson, null, null, scheduledFor, now, now);
+      return {
+        id: pubId,
+        user_id: userId,
+        clip_id: clipId,
+        job_id: jobId,
+        platform,
+        status,
+        metadata_json: metadataJson,
+        scheduled_for: scheduledFor,
+        created_at: now,
+        updated_at: now
+      };
+    },
+
+    getPublishJob(id, userId = null) {
+      if (userId) {
+        return getPublishJobStmt.get(id, userId) || null;
+      }
+      return db.prepare(`SELECT * FROM publish_jobs WHERE id = ?`).get(id) || null;
+    },
+
+    listPublishJobs(userId) {
+      return listPublishJobsStmt.all(userId);
+    },
+
+    updatePublishJob(id, updates = {}) {
+      const sets = [];
+      const values = [];
+      const now = new Date().toISOString();
+      updates.updated_at = now;
+      for (const [k, v] of Object.entries(updates)) {
+        sets.push(`${k} = ?`);
+        values.push(v);
+      }
+      if (sets.length === 0) return;
+      values.push(id);
+      const sql = `UPDATE publish_jobs SET ${sets.join(', ')} WHERE id = ?`;
+      return db.prepare(sql).run(...values);
     },
 
     // Usage

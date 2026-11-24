@@ -1,14 +1,16 @@
 // =============================================
 // SKATE — OAuth 2.0 Authentication Manager
+// Multi-user, per-user encrypted tokens in SQLite
 // =============================================
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { encryptToken, decryptToken } from './security/crypto.js';
+import { generatePKCE, createSessionOAuthState, consumeOAuthState } from './security/pkce.js';
 
-// ─── Ensure .env is loaded ───────────────────
+// ─── Ensure .env is loaded in development ────
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, '..');
@@ -34,111 +36,141 @@ try {
   }
 } catch (e) { /* ignore */ }
 
-// ─── Token Storage ────────────────────────────
-const SKATE_DIR = path.join(os.homedir(), '.skate');
-const TOKENS_FILE = path.join(SKATE_DIR, 'tokens.json');
-
-// Simple encryption key derived from machine-specific data
-const ENCRYPT_KEY = crypto
-  .createHash('sha256')
-  .update(`skate-local-${os.hostname()}-${os.userInfo().username}`)
-  .digest();
-
-function encrypt(text) {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv('aes-256-cbc', ENCRYPT_KEY, iv);
-  let encrypted = cipher.update(text, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  return iv.toString('hex') + ':' + encrypted;
+// ─── Google / YouTube OAuth Endpoints ─────────
+export function getGoogleEndpoints() {
+  return {
+    authUrl: process.env.GOOGLE_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: process.env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token',
+    userinfoUrl: process.env.GOOGLE_USERINFO_URL || 'https://www.googleapis.com/oauth2/v2/userinfo',
+    revokeUrl: process.env.GOOGLE_REVOKE_URL || 'https://oauth2.googleapis.com/revoke',
+  };
 }
 
-function decrypt(data) {
-  const [ivHex, encrypted] = data.split(':');
-  const iv = Buffer.from(ivHex, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-cbc', ENCRYPT_KEY, iv);
-  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
-}
-
-function loadTokens() {
-  try {
-    if (fs.existsSync(TOKENS_FILE)) {
-      const raw = fs.readFileSync(TOKENS_FILE, 'utf8');
-      const decrypted = decrypt(raw);
-      return JSON.parse(decrypted);
-    }
-  } catch (e) {
-    console.warn('⚠️  Could not load tokens, starting fresh:', e.message);
-  }
-  return {};
-}
-
-function saveTokens(tokens) {
-  fs.mkdirSync(SKATE_DIR, { recursive: true });
-  const encrypted = encrypt(JSON.stringify(tokens));
-  fs.writeFileSync(TOKENS_FILE, encrypted, 'utf8');
-}
-
-// In-memory token cache
-let tokenCache = loadTokens();
-
-// ─── YouTube (Google) OAuth 2.0 ───────────────
-
-const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
-const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
-const YOUTUBE_SCOPES = [
+export const YOUTUBE_SCOPES = [
   'https://www.googleapis.com/auth/youtube.upload',
-  'https://www.googleapis.com/auth/youtube.readonly',
-  'https://www.googleapis.com/auth/userinfo.profile',
+  'openid',
+  'email',
+  'profile',
 ].join(' ');
 
 /**
- * Generate YouTube OAuth authorization URL
+ * Retrieve decrypted YouTube token payload for a specific user from SQLite
+ * @param {string} userId 
+ * @param {Object} repo 
+ * @returns {Object|null}
  */
-export function getYouTubeAuthUrl(redirectUri) {
-  const clientId = process.env.YOUTUBE_CLIENT_ID;
-  if (!clientId) return null;
-
-  const state = crypto.randomBytes(16).toString('hex');
-  tokenCache._yt_state = state;
-  saveTokens(tokenCache);
-
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: YOUTUBE_SCOPES,
-    access_type: 'offline',
-    prompt: 'consent',
-    state,
-  });
-
-  return `${GOOGLE_AUTH_URL}?${params.toString()}`;
+export function getStoredYouTubeToken(userId, repo) {
+  if (!userId || !repo) return null;
+  const row = repo.getOAuthToken(userId, 'youtube');
+  if (!row || !row.enc_blob) return null;
+  try {
+    const decrypted = decryptToken(row.enc_blob);
+    return JSON.parse(decrypted);
+  } catch (err) {
+    console.error(`[auth] Failed to decrypt YouTube token for user ${userId}:`, err.message);
+    return null;
+  }
 }
 
 /**
- * Exchange YouTube authorization code for tokens
+ * Save encrypted YouTube token payload for a user into SQLite
+ * @param {string} userId 
+ * @param {Object} tokenData 
+ * @param {Object} repo 
  */
-export async function exchangeYouTubeCode(code, redirectUri) {
+export function saveStoredYouTubeToken(userId, tokenData, repo) {
+  if (!userId || !repo) return;
+  const encBlob = encryptToken(JSON.stringify(tokenData));
+  repo.saveOAuthToken({
+    userId,
+    provider: 'youtube',
+    encBlob,
+  });
+}
+
+/**
+ * Generate YouTube OAuth authorization URL with PKCE and session-bound state
+ * @param {Object} params
+ * @param {string} params.userId
+ * @param {Object} params.repo
+ * @param {string} [params.redirectUri]
+ * @returns {{ authUrl: string, state: string, codeChallenge: string }}
+ */
+export function getYouTubeAuthUrl({ userId, repo, redirectUri }) {
+  const clientId = process.env.YOUTUBE_CLIENT_ID;
+  if (!clientId) {
+    throw new Error('YOUTUBE_CLIENT_ID not configured in environment');
+  }
+
+  const { codeVerifier, codeChallenge, codeChallengeMethod } = generatePKCE();
+  const state = createSessionOAuthState(userId, codeVerifier);
+
+  const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+  const effectiveRedirectUri = redirectUri || `${baseUrl}/api/auth/callback/youtube`;
+
+  // Check if user already has a refresh token stored
+  const existingToken = repo ? getStoredYouTubeToken(userId, repo) : null;
+  const hasRefreshToken = Boolean(existingToken?.refreshToken && !existingToken?.needsReconnect);
+
+  const { authUrl } = getGoogleEndpoints();
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: effectiveRedirectUri,
+    response_type: 'code',
+    scope: YOUTUBE_SCOPES,
+    state,
+    code_challenge: codeChallenge,
+    code_challenge_method: codeChallengeMethod,
+  });
+
+  // prompt=consent and access_type=offline only when no refresh token is stored
+  if (!hasRefreshToken) {
+    params.set('access_type', 'offline');
+    params.set('prompt', 'consent');
+  }
+
+  return {
+    authUrl: `${authUrl}?${params.toString()}`,
+    state,
+    codeChallenge,
+  };
+}
+
+/**
+ * Exchange YouTube authorization code for tokens, fetch userinfo, and save encrypted in DB
+ * @param {Object} params
+ * @param {string} params.code
+ * @param {string} params.codeVerifier
+ * @param {string} params.redirectUri
+ * @param {string} params.userId
+ * @param {Object} params.repo
+ */
+export async function exchangeYouTubeCode({ code, codeVerifier, redirectUri, userId, repo }) {
   const clientId = process.env.YOUTUBE_CLIENT_ID;
   const clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
-    throw new Error('YouTube OAuth credentials not configured in .env');
+    throw new Error('YouTube OAuth credentials not configured in environment');
   }
 
-  const res = await fetch(GOOGLE_TOKEN_URL, {
+  const { tokenUrl, userinfoUrl } = getGoogleEndpoints();
+
+  const bodyParams = new URLSearchParams({
+    code,
+    client_id: clientId,
+    client_secret: clientSecret,
+    redirect_uri: redirectUri,
+    grant_type: 'authorization_code',
+  });
+
+  if (codeVerifier) {
+    bodyParams.set('code_verifier', codeVerifier);
+  }
+
+  const res = await fetch(tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      code,
-      client_id: clientId,
-      client_secret: clientSecret,
-      redirect_uri: redirectUri,
-      grant_type: 'authorization_code',
-    }),
+    body: bodyParams,
   });
 
   if (!res.ok) {
@@ -147,115 +179,162 @@ export async function exchangeYouTubeCode(code, redirectUri) {
   }
 
   const data = await res.json();
+  const accessToken = data.access_token;
+  const expiresIn = data.expires_in || 3600;
 
-  // Fetch YouTube channel name from YouTube Data API (preferred)
+  // Preserve existing refresh token if Google didn't issue a new one
+  const existing = repo ? getStoredYouTubeToken(userId, repo) : null;
+  const refreshToken = data.refresh_token || existing?.refreshToken || null;
+
+  // Fetch connected Google account profile name from userinfo
   let username = 'YouTube User';
+  let email = null;
   try {
-    const channelRes = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', {
-      headers: { Authorization: `Bearer ${data.access_token}` },
+    const profileRes = await fetch(userinfoUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (channelRes.ok) {
-      const chData = await channelRes.json();
-      if (chData.items && chData.items.length > 0) {
-        username = chData.items[0].snippet?.title || username;
-      }
+    if (profileRes.ok) {
+      const profile = await profileRes.json();
+      username = profile.name || profile.email || 'YouTube User';
+      email = profile.email || null;
     }
   } catch (e) {
-    // Fallback to Google profile
+    // Keep default username
   }
 
-  // Fallback: fetch from Google userinfo if YouTube API didn't return a name
-  if (username === 'YouTube User') {
-    try {
-      const profileRes = await fetch(GOOGLE_USERINFO_URL, {
-        headers: { Authorization: `Bearer ${data.access_token}` },
-      });
-      if (profileRes.ok) {
-        const profile = await profileRes.json();
-        username = profile.name || profile.email || 'YouTube User';
-      }
-    } catch (e) {
-      // Keep default
-    }
-  }
-
-  tokenCache.youtube = {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token || tokenCache.youtube?.refreshToken,
-    expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
+  const tokenPayload = {
+    accessToken,
+    refreshToken,
+    expiresAt: Date.now() + expiresIn * 1000,
+    scope: data.scope || YOUTUBE_SCOPES,
+    tokenType: data.token_type || 'Bearer',
     username,
+    email,
+    needsReconnect: false,
     connectedAt: Date.now(),
   };
 
-  delete tokenCache._yt_state;
-  saveTokens(tokenCache);
-  return tokenCache.youtube;
+  saveStoredYouTubeToken(userId, tokenPayload, repo);
+
+  return {
+    connected: true,
+    username,
+    email,
+    expiresAt: tokenPayload.expiresAt,
+    needsReconnect: false,
+  };
 }
 
 /**
- * Refresh YouTube access token
+ * Refresh YouTube access token for a user
+ * @param {string} userId 
+ * @param {Object} repo 
+ * @returns {Promise<string>} New access token
  */
-export async function refreshYouTubeToken() {
-  const yt = tokenCache.youtube;
-  if (!yt?.refreshToken) throw new Error('No YouTube refresh token');
+export async function refreshYouTubeToken(userId, repo) {
+  const tokenData = getStoredYouTubeToken(userId, repo);
+  if (!tokenData || !tokenData.refreshToken) {
+    throw new Error('No YouTube refresh token available for user');
+  }
 
   const clientId = process.env.YOUTUBE_CLIENT_ID;
   const clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
-    throw new Error('YouTube OAuth credentials missing in .env');
+    throw new Error('YouTube OAuth credentials missing in environment');
   }
 
-  const res = await fetch(GOOGLE_TOKEN_URL, {
+  const { tokenUrl } = getGoogleEndpoints();
+
+  const res = await fetch(tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      refresh_token: yt.refreshToken,
+      grant_type: 'refresh_token',
+      refresh_token: tokenData.refreshToken,
       client_id: clientId,
       client_secret: clientSecret,
-      grant_type: 'refresh_token',
     }),
   });
 
   if (!res.ok) {
     const err = await res.text();
-    // If token is revoked or expired, clear the stored tokens so UI prompts reconnect
+    // If token is revoked or expired, mark needs_reconnect in DB
     if (err.includes('invalid_grant') || res.status === 400 || res.status === 401) {
-      delete tokenCache.youtube;
-      saveTokens(tokenCache);
-      throw new Error('YouTube token was revoked or expired. Please reconnect.');
+      tokenData.needsReconnect = true;
+      saveStoredYouTubeToken(userId, tokenData, repo);
+      const reconnectErr = new Error('YouTube token was revoked or expired. Please reconnect.');
+      reconnectErr.code = 'INVALID_GRANT';
+      reconnectErr.needsReconnect = true;
+      throw reconnectErr;
     }
     throw new Error(`YouTube token refresh failed: ${err}`);
   }
 
   const data = await res.json();
-  tokenCache.youtube.accessToken = data.access_token;
-  tokenCache.youtube.expiresAt = Date.now() + (data.expires_in || 3600) * 1000;
-  saveTokens(tokenCache);
-  return tokenCache.youtube;
+  tokenData.accessToken = data.access_token;
+  tokenData.expiresAt = Date.now() + (data.expires_in || 3600) * 1000;
+  if (data.refresh_token) {
+    tokenData.refreshToken = data.refresh_token;
+  }
+  tokenData.needsReconnect = false;
+  saveStoredYouTubeToken(userId, tokenData, repo);
+
+  return tokenData.accessToken;
 }
 
 /**
- * Get a valid YouTube access token, refreshing if needed
+ * Get a valid YouTube access token for user, refreshing if expiring within 5 min
+ * @param {string} userId 
+ * @param {Object} repo 
+ * @returns {Promise<string|null>}
  */
-export async function getYouTubeToken() {
-  const yt = tokenCache.youtube;
-  if (!yt?.accessToken && !yt?.refreshToken) return null;
+export async function getValidYouTubeToken(userId, repo) {
+  const tokenData = getStoredYouTubeToken(userId, repo);
+  if (!tokenData) return null;
+  if (tokenData.needsReconnect) return null;
 
-  // Refresh if expiring within 5 minutes or if accessToken is missing
-  if (!yt.accessToken || (yt.expiresAt && Date.now() > yt.expiresAt - 300000)) {
+  // Refresh if missing access token or expiring within 5 minutes
+  const isExpiring = !tokenData.accessToken || (tokenData.expiresAt && Date.now() > tokenData.expiresAt - 300000);
+  if (isExpiring) {
+    if (!tokenData.refreshToken) return null;
     try {
-      await refreshYouTubeToken();
-    } catch (e) {
-      console.warn('YouTube token refresh failed:', e.message);
+      return await refreshYouTubeToken(userId, repo);
+    } catch (err) {
+      console.warn(`[auth] Auto-refresh YouTube token failed for user ${userId}:`, err.message);
       return null;
     }
   }
 
-  return tokenCache.youtube?.accessToken || null;
+  return tokenData.accessToken;
 }
 
-// ─── Instagram (Meta) OAuth 2.0 ──────────────
+/**
+ * Disconnect YouTube for a user: revokes token with Google, then deletes row from DB
+ * @param {string} userId 
+ * @param {Object} repo 
+ */
+export async function disconnectYouTube(userId, repo) {
+  const tokenData = getStoredYouTubeToken(userId, repo);
+  if (tokenData) {
+    const tokenToRevoke = tokenData.accessToken || tokenData.refreshToken;
+    if (tokenToRevoke) {
+      const { revokeUrl } = getGoogleEndpoints();
+      try {
+        await fetch(`${revokeUrl}?token=${encodeURIComponent(tokenToRevoke)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+      } catch (err) {
+        console.warn(`[auth] Google token revocation network call failed:`, err.message);
+      }
+    }
+    repo.deleteOAuthToken(userId, 'youtube');
+  }
+  return { success: true };
+}
+
+// ─── Instagram (Meta) OAuth 2.0 (Gated behind FEATURE_INSTAGRAM) ──────────
 
 const META_AUTH_URL = 'https://www.facebook.com/v21.0/dialog/oauth';
 const META_TOKEN_URL = 'https://graph.facebook.com/v21.0/oauth/access_token';
@@ -268,17 +347,16 @@ const INSTAGRAM_SCOPES = [
   'pages_read_engagement',
 ].join(',');
 
-/**
- * Generate Instagram OAuth authorization URL
- */
+export function isInstagramEnabled() {
+  return process.env.FEATURE_INSTAGRAM === 'true';
+}
+
 export function getInstagramAuthUrl(redirectUri) {
+  if (!isInstagramEnabled()) return null;
   const appId = process.env.INSTAGRAM_APP_ID;
   if (!appId) return null;
 
   const state = crypto.randomBytes(16).toString('hex');
-  tokenCache._ig_state = state;
-  saveTokens(tokenCache);
-
   const params = new URLSearchParams({
     client_id: appId,
     redirect_uri: redirectUri,
@@ -290,14 +368,14 @@ export function getInstagramAuthUrl(redirectUri) {
   return `${META_AUTH_URL}?${params.toString()}`;
 }
 
-/**
- * Exchange Instagram authorization code for tokens
- */
-export async function exchangeInstagramCode(code, redirectUri) {
+export async function exchangeInstagramCode(code, redirectUri, userId, repo) {
+  if (!isInstagramEnabled()) {
+    throw new Error('Instagram feature is currently disabled');
+  }
+
   const appId = process.env.INSTAGRAM_APP_ID;
   const appSecret = process.env.INSTAGRAM_APP_SECRET;
 
-  // Exchange code for access token
   const tokenUrl = `${META_TOKEN_URL}?${new URLSearchParams({
     client_id: appId,
     client_secret: appSecret,
@@ -315,7 +393,6 @@ export async function exchangeInstagramCode(code, redirectUri) {
   let accessToken = tokenData.access_token;
   let expiresIn = tokenData.expires_in || 3600;
 
-  // Step 2: Exchange for long-lived token (60 days)
   try {
     const longLivedUrl = `${META_LONG_LIVED_URL}?${new URLSearchParams({
       grant_type: 'fb_exchange_token',
@@ -328,40 +405,30 @@ export async function exchangeInstagramCode(code, redirectUri) {
     if (llRes.ok) {
       const llData = await llRes.json();
       accessToken = llData.access_token;
-      expiresIn = llData.expires_in || 5184000; // 60 days
+      expiresIn = llData.expires_in || 5184000;
     }
   } catch (e) {
     console.warn('Could not get long-lived Instagram token:', e.message);
   }
 
-  // Step 3: Get Instagram Business Account ID
   let igUserId = null;
   let username = 'Instagram User';
   try {
-    // Get pages linked to the user
-    const pagesRes = await fetch(
-      `https://graph.facebook.com/v21.0/me/accounts?access_token=${accessToken}`
-    );
+    const pagesRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?access_token=${accessToken}`);
     if (pagesRes.ok) {
       const pagesData = await pagesRes.json();
       if (pagesData.data && pagesData.data.length > 0) {
         const pageId = pagesData.data[0].id;
         const pageToken = pagesData.data[0].access_token;
 
-        // Get IG business account linked to the page
-        const igRes = await fetch(
-          `https://graph.facebook.com/v21.0/${pageId}?fields=instagram_business_account&access_token=${pageToken}`
-        );
+        const igRes = await fetch(`https://graph.facebook.com/v21.0/${pageId}?fields=instagram_business_account&access_token=${pageToken}`);
         if (igRes.ok) {
           const igData = await igRes.json();
           igUserId = igData.instagram_business_account?.id;
         }
 
-        // Get IG username
         if (igUserId) {
-          const userRes = await fetch(
-            `https://graph.facebook.com/v21.0/${igUserId}?fields=username&access_token=${accessToken}`
-          );
+          const userRes = await fetch(`https://graph.facebook.com/v21.0/${igUserId}?fields=username&access_token=${accessToken}`);
           if (userRes.ok) {
             const userData = await userRes.json();
             username = userData.username ? `@${userData.username}` : 'Instagram User';
@@ -373,7 +440,7 @@ export async function exchangeInstagramCode(code, redirectUri) {
     console.warn('Could not fetch IG account info:', e.message);
   }
 
-  tokenCache.instagram = {
+  const payload = {
     accessToken,
     igUserId,
     expiresAt: Date.now() + expiresIn * 1000,
@@ -381,91 +448,77 @@ export async function exchangeInstagramCode(code, redirectUri) {
     connectedAt: Date.now(),
   };
 
-  delete tokenCache._ig_state;
-  saveTokens(tokenCache);
-  return tokenCache.instagram;
-}
-
-/**
- * Get Instagram access token (no auto-refresh — long-lived tokens last 60 days)
- */
-export function getInstagramToken() {
-  const ig = tokenCache.instagram;
-  if (!ig?.accessToken) return null;
-
-  // Check if expired
-  if (ig.expiresAt && Date.now() > ig.expiresAt) {
-    console.warn('Instagram token expired. User needs to re-connect.');
-    return null;
+  if (userId && repo) {
+    const encBlob = encryptToken(JSON.stringify(payload));
+    repo.saveOAuthToken({
+      userId,
+      provider: 'instagram',
+      encBlob,
+    });
   }
 
-  return { accessToken: ig.accessToken, igUserId: ig.igUserId };
+  return payload;
 }
 
 // ─── Connection Status ────────────────────────
 
 /**
- * Get connection status for all platforms
- * Checks real token validity (not just presence)
+ * Get connection status for a user
+ * Never returns access or refresh tokens to callers.
+ * @param {string} userId 
+ * @param {Object} repo 
  */
-export function getConnectionStatus() {
-  const yt = tokenCache.youtube;
-  const ig = tokenCache.instagram;
+export function getConnectionStatus(userId, repo) {
+  const yt = userId && repo ? getStoredYouTubeToken(userId, repo) : null;
+  const ytConnected = Boolean(yt && !yt.needsReconnect && (yt.refreshToken || (yt.expiresAt && Date.now() < yt.expiresAt)));
 
-  // YouTube: connected if has valid access token or refresh token
-  // If refresh token is present but access token is missing/expired, it can still be refreshed
-  const ytHasToken = !!(yt?.accessToken || yt?.refreshToken);
-  const ytIsExpired = yt?.expiresAt && Date.now() > yt.expiresAt;
-  const ytConnected = ytHasToken && (!ytIsExpired || !!yt?.refreshToken);
+  let igStatus = {
+    enabled: isInstagramEnabled(),
+    connected: false,
+    username: null,
+    expiresAt: null,
+  };
 
-  // Instagram: connected if has valid access token and IG user ID
-  // Instagram tokens expire in 60 days (long-lived), so check expiration
-  const igHasToken = !!(ig?.accessToken && ig?.igUserId);
-  const igIsExpired = ig?.expiresAt && Date.now() > ig.expiresAt;
-  const igConnected = igHasToken && !igIsExpired;
+  if (isInstagramEnabled() && userId && repo) {
+    const row = repo.getOAuthToken(userId, 'instagram');
+    if (row && row.enc_blob) {
+      try {
+        const ig = JSON.parse(decryptToken(row.enc_blob));
+        const igConnected = Boolean(ig?.accessToken && ig?.igUserId && Date.now() < ig.expiresAt);
+        igStatus = {
+          enabled: true,
+          connected: igConnected,
+          username: ig.username || null,
+          expiresAt: ig.expiresAt || null,
+        };
+      } catch {}
+    }
+  }
 
   return {
     youtube: {
       connected: ytConnected,
       username: yt?.username || null,
+      email: yt?.email || null,
       expiresAt: yt?.expiresAt || null,
+      needsReconnect: Boolean(yt?.needsReconnect),
       connectedAt: yt?.connectedAt || null,
-      needsRefresh: ytHasToken && ytIsExpired && !!yt?.refreshToken,
     },
-    instagram: {
-      connected: igConnected,
-      username: ig?.username || null,
-      expiresAt: ig?.expiresAt || null,
-      connectedAt: ig?.connectedAt || null,
-      expired: igIsExpired,
-    },
+    instagram: igStatus,
   };
 }
 
 /**
- * Check if OAuth credentials are configured in .env
+ * Check if OAuth credentials are configured in environment
  */
 export function getCredentialStatus() {
   return {
     youtube: {
-      configured: !!(process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET),
+      configured: Boolean(process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET),
     },
     instagram: {
-      configured: !!(process.env.INSTAGRAM_APP_ID && process.env.INSTAGRAM_APP_SECRET),
+      configured: Boolean(process.env.INSTAGRAM_APP_ID && process.env.INSTAGRAM_APP_SECRET),
+      enabled: isInstagramEnabled(),
     },
   };
-}
-
-// ─── Disconnect ───────────────────────────────
-
-/**
- * Disconnect a platform (remove stored tokens)
- */
-export function disconnectPlatform(platform) {
-  if (platform === 'youtube') {
-    delete tokenCache.youtube;
-  } else if (platform === 'instagram') {
-    delete tokenCache.instagram;
-  }
-  saveTokens(tokenCache);
 }

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy - L2S</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .legal-container {
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 30px;
+      background: var(--surface, #1e222d);
+      border-radius: 12px;
+      line-height: 1.7;
+      color: var(--text, #e1e7ec);
+    }
+    .legal-container h1, .legal-container h2 {
+      color: #fff;
+    }
+    .notice-box {
+      background: rgba(255, 193, 7, 0.1);
+      border-left: 4px solid #ffc107;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="legal-container">
+    <div class="notice-box">
+      <strong>Notice:</strong> This is a template draft. Review with qualified legal counsel before production launch.
+    </div>
+    <h1>Privacy Policy</h1>
+    <p>Last updated: November 24, 2026</p>
+
+    <h2>1. Overview</h2>
+    <p>L2S ("we", "our", or "us") respects your privacy. This policy describes how we collect, use, and handle your personal data when you use our services.</p>
+
+    <h2>2. Data We Collect</h2>
+    <ul>
+      <li><strong>Account Information:</strong> Email address and hashed password credentials for user authentication.</li>
+      <li><strong>Uploaded Media:</strong> Video and audio files that you upload or provide for transcription, captioning, and vertical short clip generation.</li>
+      <li><strong>OAuth Credentials:</strong> If you connect your YouTube account, we store encrypted OAuth tokens (access and refresh tokens) to enable video uploads to your channel.</li>
+    </ul>
+
+    <h2>3. YouTube API Services & Google Data</h2>
+    <p>L2S uses YouTube API Services to allow you to upload generated video clips to your YouTube channel.</p>
+    <ul>
+      <li>By connecting your YouTube account, you agree to be bound by the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer">YouTube Terms of Service</a>.</li>
+      <li>Please refer to the <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a> for information on how Google collects and uses your data.</li>
+      <li>We access only the authorized Google scopes: <code>https://www.googleapis.com/auth/youtube.upload</code>, <code>openid</code>, <code>email</code>, and <code>profile</code>. We do not access, modify, or delete your existing videos or read your channel comments or private analytics.</li>
+      <li>OAuth tokens are encrypted at rest using AES-256-GCM. We never sell, lease, or share your Google user data with any third party.</li>
+    </ul>
+
+    <h2>4. Data Retention and Deletion</h2>
+    <ul>
+      <li><strong>Source Videos:</strong> Retained for up to 3 days to allow processing and clip extraction, then automatically deleted.</li>
+      <li><strong>Rendered Clips:</strong> Retained for 14 days, after which they are automatically pruned.</li>
+      <li><strong>Revoking Access & Deleting Tokens:</strong> You can disconnect your YouTube channel at any time within your account dashboard, which revokes and permanently deletes your stored tokens. You may also revoke L2S's access at any time via the <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">Google Security Settings</a> page.</li>
+    </ul>
+
+    <h2>5. Contact Us</h2>
+    <p>If you have any questions or data deletion requests, contact us at <a href="mailto:support@example.com">support@example.com</a>.</p>
+  </div>
+</body>
+</html>

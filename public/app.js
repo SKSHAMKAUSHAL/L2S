@@ -2929,8 +2929,18 @@ async function checkConnectionStatus() {
     if (data.connections) {
       if (data.connections.youtube?.connected) {
         setPlatformConnected('youtube', data.connections.youtube.username);
+      } else if (data.connections.youtube?.needsReconnect) {
+        const ytStatus = document.getElementById('settings-yt-status');
+        if (ytStatus) {
+          ytStatus.textContent = 'Session Expired — Reconnect Required';
+          ytStatus.style.color = '#ff4d4f';
+        }
       }
-      if (data.connections.instagram?.connected) {
+
+      if (data.connections.instagram?.enabled === false) {
+        const igRow = document.getElementById('settings-row-ig');
+        if (igRow) igRow.style.display = 'none';
+      } else if (data.connections.instagram?.connected) {
         setPlatformConnected('instagram', data.connections.instagram.username);
       }
     }
@@ -2958,22 +2968,22 @@ function checkInstagramLocalhostWarning() {
 
 function updateYouTubeQuotaBadge(quota) {
   const badgeEl = document.getElementById('yt-quota-badge');
-  if (!badgeEl) return;
+  if (!badgeEl || !quota) return;
 
-  const pct = Math.round((quota.uploadsToday / quota.maxUploads) * 100);
-  const isWarning = quota.uploadsToday >= quota.maxUploads - 1;
-  const isDanger = quota.isAtLimit;
+  const uploadsToday = quota.user?.uploadsToday ?? quota.uploadsToday ?? 0;
+  const maxUploads = quota.user?.userLimit ?? quota.maxUploads ?? 2;
+  const isDanger = Boolean(quota.isAppAtLimit || quota.user?.isUserAtLimit || quota.isAtLimit);
+  const pct = Math.min(100, Math.round((uploadsToday / Math.max(1, maxUploads)) * 100));
 
   badgeEl.innerHTML = `
     <div class="quota-bar-row">
-      <span class="quota-label">📊 Today's Uploads: <strong>${quota.uploadsToday} / ${quota.maxUploads}</strong></span>
+      <span class="quota-label">📊 Today's Uploads: <strong>${uploadsToday} / ${maxUploads}</strong></span>
       <span class="quota-reset">Resets midnight PT</span>
     </div>
     <div class="quota-bar">
-      <div class="quota-bar-fill ${isDanger ? 'danger' : isWarning ? 'warning' : ''}" style="width:${Math.max(pct, 4)}%"></div>
+      <div class="quota-bar-fill ${isDanger ? 'danger' : ''}" style="width:${Math.max(pct, 4)}%"></div>
     </div>
-    ${isDanger ? '<div class="quota-limit-msg error">⛔ Daily upload limit reached (6/6 used). Try again tomorrow at midnight Pacific Time.</div>' : ''}
-    ${isWarning && !isDanger ? '<div class="quota-limit-msg warning">⚠️ Last upload slot remaining for today.</div>' : ''}
+    ${isDanger ? '<div class="quota-limit-msg error">⛔ Daily upload limit reached. Quota resets at midnight Pacific Time.</div>' : ''}
   `;
   badgeEl.style.display = 'block';
 }

@@ -22,9 +22,10 @@ import {
   getYouTubeAuthUrl, exchangeYouTubeCode,
   getInstagramAuthUrl, exchangeInstagramCode,
   getConnectionStatus, getCredentialStatus,
-  disconnectPlatform,
+  disconnectYouTube, isInstagramEnabled,
 } from './auth.js';
-import { publishClips, getYouTubeQuotaStatus } from './uploader.js';
+import { publishClipToYouTube, uploadToYouTube, formatYouTubeMetadata } from './uploader.js';
+import { getQuotaStatus, checkQuotaBeforeUpload } from './services/youtube_quota.js';
 import { aiRegistry } from './ai/registry.js';
 import { CAPTION_PRESETS } from './captions/presets.js';
 import { fetchVideoInfoAsync } from './downloader.js';
@@ -191,6 +192,14 @@ export function createApp(options = {}) {
 
   // Serve static UI assets
   app.use(express.static(path.join(rootDir, 'public'), { maxAge: '1h' }));
+
+  // Public Legal Pages
+  app.get('/privacy', (req, res) => {
+    res.sendFile(path.join(rootDir, 'public', 'privacy.html'));
+  });
+  app.get('/terms', (req, res) => {
+    res.sendFile(path.join(rootDir, 'public', 'terms.html'));
+  });
 
   // Auth Middleware
   const requireAuth = createAuthMiddleware(repo);
@@ -762,66 +771,42 @@ export function createApp(options = {}) {
 
   // Social & OAuth
   app.get('/api/connection-status', requireAuth, (req, res) => {
-    res.json({ connections: getConnectionStatus(), credentials: getCredentialStatus(), ytQuota: getYouTubeQuotaStatus() });
+    const connections = getConnectionStatus(req.user.id, repo);
+    const credentials = getCredentialStatus();
+    const ytQuota = getQuotaStatus(repo, req.user.id, req.user.plan);
+    res.json({ connections, credentials, ytQuota });
   });
 
   app.get('/api/youtube-quota', requireAuth, (req, res) => {
-    res.json(getYouTubeQuotaStatus());
+    res.json(getQuotaStatus(repo, req.user.id, req.user.plan));
   });
 
-  app.get('/api/connect/:platform', requireAuth, (req, res) => {
+  const handleConnect = (req, res) => {
     const { platform } = req.params;
     if (platform === 'youtube') {
-      const { codeVerifier, codeChallenge } = generatePKCE();
-      const state = createSessionOAuthState(req.user.id, codeVerifier);
       const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
       const redirectUri = `${baseUrl}/api/auth/callback/youtube`;
-      const clientId = process.env.YOUTUBE_CLIENT_ID || 'dummy_client_id';
-
-      const params = new URLSearchParams({
-        client_id: clientId,
-        redirect_uri: redirectUri,
-        response_type: 'code',
-        scope: 'https://www.googleapis.com/auth/youtube.upload openid email profile',
-        access_type: 'offline',
-        prompt: 'consent',
-        state,
-        code_challenge: codeChallenge,
-        code_challenge_method: 'S256',
-      });
-
-      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-      return res.json({ success: true, platform, authUrl, state, codeChallenge });
+      try {
+        const result = getYouTubeAuthUrl({ userId: req.user.id, repo, redirectUri });
+        return res.json({ success: true, platform, authUrl: result.authUrl, state: result.state, codeChallenge: result.codeChallenge });
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
     }
-    res.json({ success: true, platform });
-  });
-
-  app.post('/api/connect/:platform', requireAuth, (req, res) => {
-    const { platform } = req.params;
-    if (platform === 'youtube') {
-      const { codeVerifier, codeChallenge } = generatePKCE();
-      const state = createSessionOAuthState(req.user.id, codeVerifier);
+    if (platform === 'instagram') {
+      if (!isInstagramEnabled()) {
+        return res.status(404).json({ error: 'Instagram feature is disabled' });
+      }
       const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
-      const redirectUri = `${baseUrl}/api/auth/callback/youtube`;
-      const clientId = process.env.YOUTUBE_CLIENT_ID || 'dummy_client_id';
-
-      const params = new URLSearchParams({
-        client_id: clientId,
-        redirect_uri: redirectUri,
-        response_type: 'code',
-        scope: 'https://www.googleapis.com/auth/youtube.upload openid email profile',
-        access_type: 'offline',
-        prompt: 'consent',
-        state,
-        code_challenge: codeChallenge,
-        code_challenge_method: 'S256',
-      });
-
-      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-      return res.json({ success: true, platform, authUrl, state, codeChallenge });
+      const redirectUri = `${baseUrl}/api/auth/callback/instagram`;
+      const authUrl = getInstagramAuthUrl(redirectUri);
+      return res.json({ success: true, platform, authUrl });
     }
-    res.json({ success: true, platform, authUrl: 'http://localhost:3000/api/auth/callback/youtube' });
-  });
+    res.status(400).json({ error: 'Unsupported platform' });
+  };
+
+  app.get('/api/connect/:platform', requireAuth, handleConnect);
+  app.post('/api/connect/:platform', requireAuth, handleConnect);
 
   app.get('/api/auth/callback/youtube', async (req, res) => {
     const { state, code, error } = req.query;
@@ -839,39 +824,119 @@ export function createApp(options = {}) {
     }
 
     const userId = stateResult.userId;
-    const tokenPayload = {
-      access_token: 'dummy_access_token_' + Date.now(),
-      refresh_token: 'dummy_refresh_token_' + Date.now(),
-      expiry_date: Date.now() + 3600000,
-      scope: 'https://www.googleapis.com/auth/youtube.upload',
-      token_type: 'Bearer',
-      created_at: new Date().toISOString(),
-    };
+    const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+    const redirectUri = `${baseUrl}/api/auth/callback/youtube`;
 
-    const encBlob = encryptToken(JSON.stringify(tokenPayload));
-    repo.saveOAuthToken({
-      userId,
-      provider: 'youtube',
-      encBlob,
-    });
+    try {
+      await exchangeYouTubeCode({
+        code: String(code),
+        codeVerifier: stateResult.codeVerifier,
+        redirectUri,
+        userId,
+        repo,
+      });
 
-    res.send('<!DOCTYPE html><html><body><h2>YouTube Connected</h2><script>if(window.opener){window.opener.postMessage({type:"oauth_callback",platform:"youtube",success:true},"*");window.close();}</script></body></html>');
+      res.send('<!DOCTYPE html><html><body><h2>YouTube Connected</h2><p>You can close this window now.</p><script>if(window.opener){window.opener.postMessage({type:"oauth_callback",platform:"youtube",success:true},"*");window.close();}</script></body></html>');
+    } catch (err) {
+      logger.error({ err, userId }, 'YouTube OAuth exchange failed');
+      res.status(400).send(`YouTube connection failed: ${err.message}`);
+    }
   });
 
-  app.get('/api/auth/callback/instagram', requireAuth, (req, res) => {
+  app.get('/api/auth/callback/instagram', (req, res) => {
+    if (!isInstagramEnabled()) {
+      return res.status(404).send('Instagram feature is disabled');
+    }
     res.send('<html><body>Instagram Connected</body></html>');
   });
 
-  app.post('/api/disconnect/:platform', requireAuth, (req, res) => {
-    res.json({ success: true });
+  app.post('/api/disconnect/:platform', requireAuth, async (req, res) => {
+    const { platform } = req.params;
+    if (platform === 'youtube') {
+      await disconnectYouTube(req.user.id, repo);
+      return res.json({ success: true, message: 'YouTube disconnected' });
+    }
+    if (platform === 'instagram') {
+      repo.deleteOAuthToken(req.user.id, 'instagram');
+      return res.json({ success: true, message: 'Instagram disconnected' });
+    }
+    res.status(400).json({ error: 'Unsupported platform' });
   });
 
-  app.post('/api/publish-clip', requireAuth, (req, res) => {
-    res.json({ success: true, message: 'Published' });
+  app.post('/api/publish-clip', requireAuth, async (req, res) => {
+    try {
+      const { clipId, jobId, clipIndex, metadata = {} } = req.body || {};
+
+      let clip = null;
+      if (clipId) {
+        clip = repo.getClip(jobId, clipIndex !== undefined ? clipIndex : 0, req.user.id);
+        if (!clip) {
+          const allClips = repo.listClips(jobId, req.user.id);
+          clip = allClips.find(c => c.id === clipId);
+        }
+      } else if (jobId !== undefined && clipIndex !== undefined) {
+        clip = repo.getClip(jobId, clipIndex, req.user.id);
+      }
+
+      if (!clip) {
+        const padNum = String(clipIndex || 0).padStart(2, '0');
+        const fallbackPath = path.resolve(rootDir, 'output', jobId, 'clips', `clip-${padNum}.mp4`);
+        if (fs.existsSync(fallbackPath)) {
+          clip = {
+            id: clipId || 'clp_' + Date.now(),
+            job_id: jobId,
+            user_id: req.user.id,
+            idx: Number(clipIndex || 0),
+            title: metadata.title || `Clip ${Number(clipIndex || 0) + 1}`,
+            file_path: fallbackPath,
+          };
+        } else {
+          return res.status(404).json({ error: 'Clip not found or unauthorized' });
+        }
+      }
+
+      let filePath = clip.file_path;
+      if (!filePath || !fs.existsSync(filePath)) {
+        const padNum = String(clip.idx).padStart(2, '0');
+        const c1 = path.resolve(rootDir, 'storage', req.user.id, clip.job_id, 'clips', `clip-${padNum}.mp4`);
+        const c2 = path.resolve(rootDir, 'output', clip.job_id, 'clips', `clip-${padNum}.mp4`);
+        if (fs.existsSync(c1)) filePath = c1;
+        else if (fs.existsSync(c2)) filePath = c2;
+      }
+
+      if (!filePath || !fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'Rendered video file for this clip does not exist on disk' });
+      }
+
+      const result = await publishClipToYouTube({
+        clipId: clip.id,
+        userId: req.user.id,
+        jobId: clip.job_id,
+        filePath,
+        metadata,
+        clip,
+        clipIndex: clip.idx,
+        repo,
+        broadcast,
+      });
+
+      res.json(result);
+    } catch (err) {
+      logger.error({ err, userId: req.user.id }, 'Publish clip error');
+      res.status(500).json({ error: `Publishing failed: ${err.message}` });
+    }
   });
 
-  app.post('/api/publish', requireAuth, (req, res) => {
-    res.json({ success: true, message: 'Publishing initiated' });
+  app.post('/api/publish', requireAuth, async (req, res) => {
+    try {
+      const { jobId, clips = [], workflow = {} } = req.body || {};
+      if (!jobId) {
+        return res.status(400).json({ error: 'jobId is required' });
+      }
+      res.json({ success: true, message: 'Publishing initiated', jobId });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.get('/api/video-info', requireAuth, async (req, res) => {
