@@ -6124,3 +6124,135 @@ footer p {
   border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   YouTube Embed Notice & Resilient Fallback Poster View (Error 153)
+   ═══════════════════════════════════════════════════════════════════ */
+.yt-embed-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 12px;
+  padding: 8px 14px;
+  margin-bottom: 12px;
+  font-size: 0.78rem;
+  flex-wrap: wrap;
+}
+
+.yt-embed-notice-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.yt-notice-icon {
+  font-size: 1.1rem;
+}
+
+.yt-notice-text strong {
+  color: var(--text-primary);
+  margin-right: 6px;
+}
+
+.yt-notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-yt-notice-toggle,
+.btn-yt-notice-watch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f1f5f9;
+  padding: 5px 11px;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-yt-notice-toggle:hover,
+.btn-yt-notice-watch:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.workspace-yt-poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #000;
+  z-index: 2;
+}
+
+.yt-poster-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: brightness(0.65);
+}
+
+.yt-poster-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  background: radial-gradient(circle at center, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0.85));
+}
+
+.yt-poster-play-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+  text-decoration: none;
+  box-shadow: 0 4px 24px rgba(239, 68, 68, 0.6);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.yt-poster-play-btn:hover {
+  transform: scale(1.1);
+  background: #dc2626;
+}
+
+.yt-poster-badge {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  padding: 4px 14px;
+  border-radius: 20px;
+  margin-bottom: 8px;
+}
+
+.yt-poster-hint {
+  font-size: 0.74rem;
+  color: #94a3b8;
+  max-width: 380px;
+  line-height: 1.4;
+}
+

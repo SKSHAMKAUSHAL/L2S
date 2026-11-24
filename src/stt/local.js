@@ -26,6 +26,58 @@ export async function transcribeLocal(audioPath, options = {}, onProgress) {
     onProgress(`Transcribing audio locally using faster-whisper (${modelSize})...`);
   }
 
+  // If deployed on Vercel with bound Python scripts service, call via internal URL binding
+  if (process.env.SCRIPTS_SERVICE_URL) {
+    try {
+      const endpoint = new URL('/transcribe', process.env.SCRIPTS_SERVICE_URL);
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioPath, modelSize, language, prompt })
+      });
+      if (resp.ok) {
+        const parsed = await resp.json();
+        if (parsed && !parsed.error && parsed.segments) {
+          const rawSegments = parsed.segments || [];
+          const rawWords = parsed.words || [];
+
+          const normalizedSegments = rawSegments.map((s, idx) => ({
+            id: s.id ?? idx,
+            start: Number(s.start ?? 0),
+            end: Number(s.end ?? 0),
+            text: String(s.text || '').trim(),
+            words: (s.words || []).map(w => ({
+              word: String(w.word || '').trim(),
+              start: Number(w.start ?? 0),
+              end: Number(w.end ?? 0),
+              probability: Number(w.probability ?? 1),
+            })),
+          }));
+
+          const normalizedWords = rawWords.map(w => ({
+            word: String(w.word || '').trim(),
+            start: Number(w.start ?? 0),
+            end: Number(w.end ?? 0),
+            probability: Number(w.probability ?? 1),
+          }));
+
+          const fullText = normalizedSegments.map(s => s.text).join(' ').trim();
+          const scriptStats = computeScriptStats(fullText);
+
+          return {
+            segments: normalizedSegments,
+            words: normalizedWords,
+            text: fullText,
+            language: parsed.info?.language || language || 'en',
+            scriptStats,
+          };
+        }
+      }
+    } catch (serviceErr) {
+      // Fall through to local process spawn if internal service call fails
+    }
+  }
+
   const args = [SCRIPT_PATH, audioPath, '--model_size', modelSize];
 
   if (language && language !== 'auto') {

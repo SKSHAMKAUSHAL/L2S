@@ -261,6 +261,21 @@ export function createApp(options = {}) {
     });
   });
 
+  app.get('/api/auth/csrf', (req, res) => {
+    let rawToken = req.cookies ? req.cookies[SESSION_COOKIE_NAME] : null;
+    if (!rawToken && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      rawToken = req.headers.authorization.slice(7).trim();
+    }
+    if (!rawToken) {
+      return res.json({ csrfToken: null });
+    }
+    const session = repo.getSession(rawToken);
+    if (!session) {
+      return res.json({ csrfToken: null });
+    }
+    res.json({ csrfToken: session.csrf_token });
+  });
+
   // Public Health Endpoints
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });

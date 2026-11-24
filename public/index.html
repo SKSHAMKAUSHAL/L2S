@@ -163,6 +163,21 @@
               <button class="video-info-close" id="video-info-close" title="Clear">&times;</button>
             </div>
 
+            <!-- YouTube Embed Helper / Error 153 Fallback Bar -->
+            <div id="yt-embed-notice" class="yt-embed-notice" style="display:none">
+              <div class="yt-embed-notice-content">
+                <span class="yt-notice-icon">⚡</span>
+                <div class="yt-notice-text">
+                  <strong>Preview Mode</strong>
+                  <span id="yt-notice-msg">If YouTube restricts embedded playback (Error 153), AI video download &amp; transcription remain 100% operational!</span>
+                </div>
+              </div>
+              <div class="yt-notice-actions">
+                <button type="button" class="btn-yt-notice-toggle" id="btn-toggle-yt-poster">🖼️ Switch to Poster</button>
+                <a href="#" target="_blank" rel="noopener noreferrer" class="btn-yt-notice-watch" id="btn-yt-notice-external">▶️ Watch on YouTube ↗</a>
+              </div>
+            </div>
+
             <!-- YouTube Embed / Local Video Player / Reference Placeholder Image -->
             <div class="workspace-video-container" id="workspace-video-container">
               <div class="workspace-video-placeholder" id="workspace-video-placeholder">
@@ -176,8 +191,19 @@
                   <span>Paste a video URL or local file to preview</span>
                 </div>
               </div>
+              <!-- High-Res YouTube Poster Fallback (used if creator disabled embedding) -->
+              <div id="workspace-yt-poster" class="workspace-yt-poster" style="display:none">
+                <img id="yt-poster-img" src="" alt="YouTube Thumbnail Poster" class="yt-poster-img" />
+                <div class="yt-poster-overlay">
+                  <a href="#" target="_blank" rel="noopener noreferrer" id="yt-poster-play-btn" class="yt-poster-play-btn" title="Open and watch video directly on YouTube">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>
+                  </a>
+                  <div class="yt-poster-badge">✓ Verified &amp; Ready for AI Shorts Generation</div>
+                  <div class="yt-poster-hint">Creator restricted third-party player embed. Video pipeline downloads &amp; generates clips with Whisper normally.</div>
+                </div>
+              </div>
               <!-- YouTube iframe -->
-              <iframe id="workspace-yt-iframe" class="workspace-yt-iframe" style="display:none" allowfullscreen allow="autoplay; encrypted-media"></iframe>
+              <iframe id="workspace-yt-iframe" class="workspace-yt-iframe" style="display:none" allowfullscreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin"></iframe>
               <!-- Local video player -->
               <video id="workspace-local-video" class="workspace-local-video" style="display:none" controls playsinline></video>
             </div>

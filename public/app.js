@@ -2,6 +2,68 @@
 // SKATE v2 — Frontend Logic (Overhauled)
 // ═══════════════════════════════════════════
 
+// ─── Production-Grade Resilient CSRF Interceptor ────────────
+let csrfToken = localStorage.getItem('l2s_csrf_token') || null;
+
+const originalFetch = window.fetch;
+window.fetch = async function (resource, init = {}) {
+  const method = (init && init.method ? init.method : 'GET').toUpperCase();
+
+  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+    init = init || {};
+    init.headers = init.headers || {};
+
+    if (init.headers instanceof Headers) {
+      if (csrfToken && !init.headers.has('x-csrf-token')) {
+        init.headers.set('x-csrf-token', csrfToken);
+      }
+    } else if (Array.isArray(init.headers)) {
+      if (csrfToken && !init.headers.some(([k]) => k.toLowerCase() === 'x-csrf-token')) {
+        init.headers.push(['x-csrf-token', csrfToken]);
+      }
+    } else {
+      if (csrfToken && !init.headers['x-csrf-token'] && !init.headers['X-CSRF-Token']) {
+        init.headers['x-csrf-token'] = csrfToken;
+      }
+    }
+  }
+
+  let response = await originalFetch.apply(this, [resource, init]);
+
+  // Transparent auto-recovery: If 403 CSRF error occurs, fetch fresh token and retry once
+  if (response.status === 403 && typeof resource === 'string' && resource.startsWith('/api/') && !resource.startsWith('/api/auth/')) {
+    try {
+      const cloned = response.clone();
+      const errData = await cloned.json().catch(() => ({}));
+      if (errData && errData.error && errData.error.toLowerCase().includes('csrf')) {
+        const csrfRes = await originalFetch('/api/auth/csrf');
+        if (csrfRes.ok) {
+          const { csrfToken: freshToken } = await csrfRes.json().catch(() => ({}));
+          if (freshToken) {
+            csrfToken = freshToken;
+            localStorage.setItem('l2s_csrf_token', freshToken);
+
+            if (init.headers instanceof Headers) {
+              init.headers.set('x-csrf-token', freshToken);
+            } else if (Array.isArray(init.headers)) {
+              const idx = init.headers.findIndex(([k]) => k.toLowerCase() === 'x-csrf-token');
+              if (idx >= 0) init.headers[idx][1] = freshToken;
+              else init.headers.push(['x-csrf-token', freshToken]);
+            } else {
+              init.headers['x-csrf-token'] = freshToken;
+            }
+            response = await originalFetch.apply(this, [resource, init]);
+          }
+        }
+      }
+    } catch (e) {
+      // Return original response
+    }
+  }
+
+  return response;
+};
+
 // ─── DOM Elements ────────────────────────────
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -34,6 +96,12 @@ const els = {
   workspaceVideoPlaceholder: $('#workspace-video-placeholder'),
   workspaceYtIframe: $('#workspace-yt-iframe'),
   workspaceLocalVideo: $('#workspace-local-video'),
+  ytEmbedNotice: $('#yt-embed-notice'),
+  btnToggleYtPoster: $('#btn-toggle-yt-poster'),
+  btnYtNoticeExternal: $('#btn-yt-notice-external'),
+  workspaceYtPoster: $('#workspace-yt-poster'),
+  ytPosterImg: $('#yt-poster-img'),
+  ytPosterPlayBtn: $('#yt-poster-play-btn'),
   // Pipeline
   pipelineSection: $('#pipeline-section') || $('#progress-section'),
   pipelineTimer: $('#pipeline-timer'),
@@ -596,18 +664,38 @@ function extractYouTubeVideoId(url) {
   return match ? match[1] : null;
 }
 
+let currentLoadedYtVideoId = null;
+let isYtPosterMode = false;
+
 function showWorkspaceWithEmbed(url) {
   els.workspaceSection.classList.add('visible');
 
   const videoId = extractYouTubeVideoId(url);
   if (videoId) {
-    // Show YouTube embed
+    currentLoadedYtVideoId = videoId;
+    isYtPosterMode = false;
+
+    // Use standard embed with enablejsapi and origin to prevent Error 153 configuration failure
+    const originParam = window.location.origin && window.location.origin !== 'null' ? `&origin=${encodeURIComponent(window.location.origin)}` : '';
+    els.workspaceYtIframe.src = `https://www.youtube.com/embed/${videoId}?enablejsapi=1&rel=0${originParam}`;
+    els.workspaceYtIframe.style.display = 'block';
+
+    if (els.workspaceYtPoster) els.workspaceYtPoster.style.display = 'none';
     els.workspaceVideoPlaceholder.style.display = 'none';
     els.workspaceLocalVideo.style.display = 'none';
-    els.workspaceYtIframe.src = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=0&rel=0&modestbranding=1`;
-    els.workspaceYtIframe.style.display = 'block';
+
+    // Configure fallback links and notice
+    const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const posterUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+
+    if (els.ytEmbedNotice) els.ytEmbedNotice.style.display = 'flex';
+    if (els.btnYtNoticeExternal) els.btnYtNoticeExternal.href = watchUrl;
+    if (els.ytPosterImg) els.ytPosterImg.src = posterUrl;
+    if (els.ytPosterPlayBtn) els.ytPosterPlayBtn.href = watchUrl;
+    if (els.btnToggleYtPoster) els.btnToggleYtPoster.textContent = '🖼️ Switch to Poster';
   } else if (isInstagramUrl(url)) {
-    // Show Instagram Reel visual placeholder
+    if (els.ytEmbedNotice) els.ytEmbedNotice.style.display = 'none';
+    if (els.workspaceYtPoster) els.workspaceYtPoster.style.display = 'none';
     els.workspaceYtIframe.style.display = 'none';
     els.workspaceYtIframe.src = '';
     els.workspaceLocalVideo.style.display = 'none';
@@ -625,7 +713,23 @@ function showWorkspaceWithEmbed(url) {
   }
 }
 
+els.btnToggleYtPoster?.addEventListener('click', () => {
+  if (!currentLoadedYtVideoId) return;
+  isYtPosterMode = !isYtPosterMode;
+  if (isYtPosterMode) {
+    els.workspaceYtIframe.style.display = 'none';
+    if (els.workspaceYtPoster) els.workspaceYtPoster.style.display = 'block';
+    if (els.btnToggleYtPoster) els.btnToggleYtPoster.textContent = '🎬 Switch to Player';
+  } else {
+    if (els.workspaceYtPoster) els.workspaceYtPoster.style.display = 'none';
+    els.workspaceYtIframe.style.display = 'block';
+    if (els.btnToggleYtPoster) els.btnToggleYtPoster.textContent = '🖼️ Switch to Poster';
+  }
+});
+
 function switchToLocalVideo() {
+  if (els.ytEmbedNotice) els.ytEmbedNotice.style.display = 'none';
+  if (els.workspaceYtPoster) els.workspaceYtPoster.style.display = 'none';
   // After pipeline download, switch from iframe to local video
   els.workspaceYtIframe.style.display = 'none';
   els.workspaceYtIframe.src = '';
@@ -4609,6 +4713,10 @@ async function initAuthSession() {
       const data = await res.json();
       if (data && data.user) {
         currentAuthUser = data.user;
+        if (data.csrfToken) {
+          csrfToken = data.csrfToken;
+          localStorage.setItem('l2s_csrf_token', csrfToken);
+        }
         if (emailEl) emailEl.textContent = data.user.email;
         if (planEl) {
           planEl.textContent = (data.user.plan || 'FREE').toUpperCase();
@@ -4632,6 +4740,8 @@ document.getElementById('btn-header-logout')?.addEventListener('click', async (e
   e.preventDefault();
   try {
     await fetch('/api/auth/logout', { method: 'POST' });
+    csrfToken = null;
+    localStorage.removeItem('l2s_csrf_token');
     showToast('Logged out of your account', 'info');
     setTimeout(() => {
       window.location.href = '/login.html';

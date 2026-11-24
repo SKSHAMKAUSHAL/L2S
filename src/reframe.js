@@ -264,6 +264,36 @@ export async function analyzeClipReframe(videoPath, start, end, options = {}) {
     } catch (e) {}
   }
 
+  // If deployed on Vercel with bound Python scripts service, call via internal URL binding
+  if (process.env.SCRIPTS_SERVICE_URL) {
+    try {
+      const endpoint = new URL('/reframe', process.env.SCRIPTS_SERVICE_URL);
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ videoPath, start, end, targetAspect })
+      });
+      if (resp.ok) {
+        const rawData = await resp.json();
+        if (rawData && rawData.path) {
+          const smoothPath = computeSmoothCropPath(rawData, { targetAspect });
+          const result = {
+            ...rawData,
+            smooth_path: smoothPath,
+            cached_at: Date.now()
+          };
+          try {
+            fs.mkdirSync(CACHE_DIR, { recursive: true });
+            fs.writeFileSync(cacheFilePath, JSON.stringify(result), 'utf8');
+          } catch (e) {}
+          return result;
+        }
+      }
+    } catch (serviceErr) {
+      // Fall through to local spawn if internal service call fails
+    }
+  }
+
   await acquireSemaphore();
 
   try {

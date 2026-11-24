@@ -62,6 +62,11 @@ authForm?.addEventListener('submit', async (e) => {
       return;
     }
 
+    // Store CSRF token for seamless API requests
+    if (data && data.csrfToken) {
+      localStorage.setItem('l2s_csrf_token', data.csrfToken);
+    }
+
     // Redirect to main application
     window.location.href = '/';
   } catch (err) {

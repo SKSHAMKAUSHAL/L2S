@@ -134,9 +134,17 @@ export function createAuthMiddleware(repo) {
     // CSRF Check for state-mutating HTTP methods
     const mutatingMethods = ['POST', 'PUT', 'DELETE', 'PATCH'];
     if (mutatingMethods.includes(req.method.toUpperCase())) {
-      const csrfHeader = req.headers['x-csrf-token'];
-      if (!csrfHeader || csrfHeader !== session.csrf_token) {
-        return res.status(403).json({ error: 'Invalid or missing CSRF token' });
+      // Bearer token authentication is inherently immune to ambient-cookie CSRF attacks
+      const isBearerAuth = req.headers.authorization && req.headers.authorization.startsWith('Bearer ');
+      if (!isBearerAuth) {
+        const csrfHeader = req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || (req.body && req.body._csrf);
+        if (!csrfHeader || csrfHeader !== session.csrf_token) {
+          return res.status(403).json({
+            error: 'Invalid or missing CSRF token',
+            code: 'CSRF_INVALID',
+            message: 'Your security CSRF token is missing or expired. Please refresh the page.'
+          });
+        }
       }
     }
 

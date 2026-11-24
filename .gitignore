@@ -55,3 +55,10 @@ storage/
 *.mp3
 *.wav
 *.flac
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+

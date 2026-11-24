@@ -1,0 +1,30 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "app": {
+      "root": ".",
+      "framework": "express",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "scripts",
+          "format": "url",
+          "env": "SCRIPTS_SERVICE_URL"
+        }
+      ]
+    },
+    "scripts": {
+      "root": "scripts",
+      "runtime": "python",
+      "entrypoint": "index.py"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "app"
+      }
+    }
+  ]
+}

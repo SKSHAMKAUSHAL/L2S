@@ -135,6 +135,7 @@ describe('Step 7: Authorization & Cross-Tenant Isolation (tests/authz.test.js)',
       '/api/auth/me',
       '/api/auth/callback/youtube',
       '/api/auth/callback/instagram',
+      '/api/auth/csrf',
       '/api/health',
       '/healthz',
       '/api/status/hardware'
@@ -209,5 +210,51 @@ describe('Step 7: Authorization & Cross-Tenant Isolation (tests/authz.test.js)',
       });
       ws.on('error', reject);
     });
+  });
+
+  it('5. CSRF protection accepts valid tokens, rejects invalid/missing, and supports GET /api/auth/csrf', async () => {
+    // 5a. GET /api/auth/csrf returns the session's CSRF token
+    const csrfRes = await fetch(`${baseUrl}/api/auth/csrf`, {
+      headers: { 'Cookie': cookieA }
+    });
+    assert.strictEqual(csrfRes.status, 200);
+    const csrfData = await csrfRes.json();
+    assert.strictEqual(csrfData.csrfToken, csrfA);
+
+    // 5b. Mutating POST without CSRF token returns 403
+    const badRes = await fetch(`${baseUrl}/api/process/stop`, {
+      method: 'POST',
+      headers: {
+        'Cookie': cookieA,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({})
+    });
+    assert.strictEqual(badRes.status, 403);
+    const badData = await badRes.json();
+    assert.ok(badData.error.includes('CSRF'));
+
+    // 5c. Mutating POST with valid x-csrf-token header succeeds (not 403)
+    const goodRes = await fetch(`${baseUrl}/api/process/stop`, {
+      method: 'POST',
+      headers: {
+        'Cookie': cookieA,
+        'Content-Type': 'application/json',
+        'x-csrf-token': csrfA
+      },
+      body: JSON.stringify({})
+    });
+    assert.strictEqual(goodRes.status, 200);
+
+    // 5d. Mutating POST with Authorization: Bearer bypasses CSRF check
+    const bearerRes = await fetch(`${baseUrl}/api/process/stop`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${sessionA ? sessionA.token : cookieA.replace('l2s_session=', '')}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({})
+    });
+    assert.strictEqual(bearerRes.status, 200);
   });
 });
