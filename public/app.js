@@ -3378,18 +3378,18 @@ els.btnConnectIg?.addEventListener('click', async () => {
   try {
     const res = await fetch('/api/connect/instagram', { method: 'POST' });
     const data = await res.json();
-    if (data.success) {
+    if (data.authUrl) {
+      window.open(data.authUrl, '_blank', 'width=620,height=720');
+      showToast('Complete Instagram login in the popup window', 'info');
+    } else if (data.success) {
       setPlatformConnected('instagram', data.username);
       showToast('Instagram connected!', 'success');
-    } else if (data.authUrl) {
-      window.open(data.authUrl, '_blank', 'width=600,height=700');
-      showToast('Complete login in the popup window', 'info');
     } else if (data.needsSetup) {
       setupGuideToggle?.classList.add('open');
       setupGuidePanel?.classList.add('open');
-      showToast(data.message || 'OAuth not configured. See Setup Guide.', 'warning');
+      showToast(data.error || data.message || 'OAuth not configured. See Setup Guide.', 'warning');
     } else {
-      showToast(data.message || 'OAuth not configured yet', 'warning');
+      showToast(data.error || data.message || 'OAuth not configured yet', 'warning');
     }
   } catch (err) {
     showToast('Failed to connect Instagram', 'error');
@@ -3412,18 +3412,18 @@ els.btnConnectYt?.addEventListener('click', async () => {
   try {
     const res = await fetch('/api/connect/youtube', { method: 'POST' });
     const data = await res.json();
-    if (data.success) {
+    if (data.authUrl) {
+      window.open(data.authUrl, '_blank', 'width=620,height=720');
+      showToast('Complete Google / YouTube login in the popup window', 'info');
+    } else if (data.success) {
       setPlatformConnected('youtube', data.username);
       showToast('YouTube connected!', 'success');
-    } else if (data.authUrl) {
-      window.open(data.authUrl, '_blank', 'width=600,height=700');
-      showToast('Complete login in the popup window', 'info');
     } else if (data.needsSetup) {
       setupGuideToggle?.classList.add('open');
       setupGuidePanel?.classList.add('open');
-      showToast(data.message || 'OAuth not configured. See Setup Guide.', 'warning');
+      showToast(data.error || data.message || 'OAuth not configured. See Setup Guide.', 'warning');
     } else {
-      showToast(data.message || 'OAuth not configured yet', 'warning');
+      showToast(data.error || data.message || 'OAuth not configured yet', 'warning');
     }
   } catch (err) {
     showToast('Failed to connect YouTube', 'error');
@@ -4129,13 +4129,37 @@ settingsBtnClean?.addEventListener('click', async () => {
   }
 });
 
-settingsBtnYt?.addEventListener('click', () => {
-  window.open('/api/connect/youtube', '_blank', 'width=620,height=720');
-  setTimeout(refreshSettingsModal, 2000);
-});
-settingsBtnIg?.addEventListener('click', () => {
-  window.open('/api/connect/instagram', '_blank', 'width=620,height=720');
-  setTimeout(refreshSettingsModal, 2000);
+async function connectSocialFromSettings(platform) {
+  try {
+    const res = await fetch(`/api/connect/${platform}`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || data.message || `${platform} OAuth is not configured`, 'warning');
+      return;
+    }
+    if (data.authUrl) {
+      window.open(data.authUrl, '_blank', 'width=620,height=720');
+      showToast(`Complete ${platform === 'youtube' ? 'Google / YouTube' : 'Instagram'} login in the popup`, 'info');
+      setTimeout(refreshSettingsModal, 2500);
+    } else if (data.success) {
+      showToast(`${platform} connected!`, 'success');
+      refreshSettingsModal();
+    }
+  } catch (e) {
+    showToast(`Failed to start ${platform} OAuth`, 'error');
+  }
+}
+
+settingsBtnYt?.addEventListener('click', () => connectSocialFromSettings('youtube'));
+settingsBtnIg?.addEventListener('click', () => connectSocialFromSettings('instagram'));
+
+window.addEventListener('message', (event) => {
+  if (event.data?.type === 'oauth_callback' && event.data?.success) {
+    const plat = event.data.platform === 'instagram' ? 'Instagram' : 'YouTube';
+    showToast(`${plat} connected!`, 'success');
+    refreshSettingsModal();
+    if (typeof loadConnectionStatus === 'function') loadConnectionStatus();
+  }
 });
 
 // Initial provider & hardware check on page load

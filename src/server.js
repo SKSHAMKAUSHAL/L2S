@@ -1242,23 +1242,38 @@ export function createApp(options = {}) {
 
   const handleConnect = (req, res) => {
     const { platform } = req.params;
+    const wantsHtml = req.method === 'GET' && !req.xhr && (req.headers.accept || '').includes('text/html');
+
     if (platform === 'youtube') {
       const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
       const redirectUri = `${baseUrl}/api/auth/callback/youtube`;
       try {
         const result = getYouTubeAuthUrl({ userId: req.user.id, repo, redirectUri });
+        if (wantsHtml) {
+          return res.redirect(result.authUrl);
+        }
         return res.json({ success: true, platform, authUrl: result.authUrl, state: result.state, codeChallenge: result.codeChallenge });
       } catch (err) {
+        if (wantsHtml) {
+          return res.status(400).send(`<html><body style="font-family:sans-serif;background:#0b0c12;color:#fff;padding:24px"><h3>YouTube OAuth Error</h3><p>${err.message}</p></body></html>`);
+        }
         return res.status(400).json({ error: err.message });
       }
     }
     if (platform === 'instagram') {
       if (!isInstagramEnabled()) {
-        return res.status(404).json({ error: 'Instagram feature is disabled' });
+        const msg = 'Instagram OAuth is not configured. Set FEATURE_INSTAGRAM=true and Meta App credentials in .env.';
+        if (wantsHtml) {
+          return res.status(404).send(`<html><body style="font-family:sans-serif;background:#0b0c12;color:#fff;padding:24px"><h3>Instagram Not Configured</h3><p>${msg}</p></body></html>`);
+        }
+        return res.status(404).json({ error: msg, needsSetup: true });
       }
       const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
       const redirectUri = `${baseUrl}/api/auth/callback/instagram`;
       const authUrl = getInstagramAuthUrl(redirectUri);
+      if (wantsHtml) {
+        return res.redirect(authUrl);
+      }
       return res.json({ success: true, platform, authUrl });
     }
     res.status(400).json({ error: 'Unsupported platform' });
