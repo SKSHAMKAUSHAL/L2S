@@ -4130,6 +4130,19 @@ settingsBtnClean?.addEventListener('click', async () => {
 });
 
 async function connectSocialFromSettings(platform) {
+  const btn = platform === 'youtube' ? settingsBtnYt : settingsBtnIg;
+  if (btn && btn.textContent.trim() === 'Disconnect') {
+    try {
+      await fetch(`/api/disconnect/${platform}`, { method: 'POST' });
+      showToast(`${platform === 'youtube' ? 'YouTube' : 'Instagram'} disconnected`, 'info');
+      await refreshSettingsModal();
+      if (typeof loadConnectionStatus === 'function') loadConnectionStatus();
+    } catch (e) {
+      showToast(`Failed to disconnect ${platform}`, 'error');
+    }
+    return;
+  }
+
   try {
     const res = await fetch(`/api/connect/${platform}`, { method: 'POST' });
     const data = await res.json();
@@ -4138,9 +4151,19 @@ async function connectSocialFromSettings(platform) {
       return;
     }
     if (data.authUrl) {
-      window.open(data.authUrl, '_blank', 'width=620,height=720');
+      const popup = window.open(data.authUrl, '_blank', 'width=620,height=720');
       showToast(`Complete ${platform === 'youtube' ? 'Google / YouTube' : 'Instagram'} login in the popup`, 'info');
-      setTimeout(refreshSettingsModal, 2500);
+      if (popup) {
+        const pollTimer = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(pollTimer);
+            refreshSettingsModal();
+            if (typeof loadConnectionStatus === 'function') loadConnectionStatus();
+          }
+        }, 800);
+      } else {
+        setTimeout(refreshSettingsModal, 3000);
+      }
     } else if (data.success) {
       showToast(`${platform} connected!`, 'success');
       refreshSettingsModal();
