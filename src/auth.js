@@ -334,38 +334,40 @@ export async function disconnectYouTube(userId, repo) {
   return { success: true };
 }
 
-// ─── Instagram (Meta) OAuth 2.0 (Gated behind FEATURE_INSTAGRAM) ──────────
+// ─── Instagram Login OAuth 2.0 (Direct Instagram Login — No Facebook Required) ──────────
 
-const META_AUTH_URL = 'https://www.facebook.com/v21.0/dialog/oauth';
-const META_TOKEN_URL = 'https://graph.facebook.com/v21.0/oauth/access_token';
-const META_LONG_LIVED_URL = 'https://graph.facebook.com/v21.0/oauth/access_token';
+const INSTAGRAM_AUTH_URL = 'https://www.instagram.com/oauth/authorize';
+const INSTAGRAM_TOKEN_URL = 'https://api.instagram.com/oauth/access_token';
+const INSTAGRAM_GRAPH_URL = 'https://graph.instagram.com';
 
 const INSTAGRAM_SCOPES = [
-  'instagram_basic',
-  'instagram_content_publish',
-  'pages_show_list',
-  'pages_read_engagement',
+  'instagram_business_basic',
+  'instagram_business_content_publish',
 ].join(',');
 
 export function isInstagramEnabled() {
   return process.env.FEATURE_INSTAGRAM !== 'false';
 }
 
-export function getInstagramAuthUrl(redirectUri) {
+export function getInstagramAuthUrl(redirectUri, userId = null) {
   if (!isInstagramEnabled()) return null;
   const appId = process.env.INSTAGRAM_APP_ID;
   if (!appId) return null;
 
-  const state = crypto.randomBytes(16).toString('hex');
+  const state = userId
+    ? createSessionOAuthState(userId, 'instagram')
+    : crypto.randomBytes(16).toString('hex');
   const params = new URLSearchParams({
+    enable_fb_login: '0',
+    force_authentication: '1',
     client_id: appId,
     redirect_uri: redirectUri,
-    scope: INSTAGRAM_SCOPES,
     response_type: 'code',
+    scope: INSTAGRAM_SCOPES,
     state,
   });
 
-  return `${META_AUTH_URL}?${params.toString()}`;
+  return `${INSTAGRAM_AUTH_URL}?${params.toString()}`;
 }
 
 export async function exchangeInstagramCode(code, redirectUri, userId, repo) {
@@ -375,65 +377,67 @@ export async function exchangeInstagramCode(code, redirectUri, userId, repo) {
 
   const appId = process.env.INSTAGRAM_APP_ID;
   const appSecret = process.env.INSTAGRAM_APP_SECRET;
+  if (!appId || !appSecret) {
+    throw new Error('INSTAGRAM_APP_ID and INSTAGRAM_APP_SECRET are not configured');
+  }
 
-  const tokenUrl = `${META_TOKEN_URL}?${new URLSearchParams({
+  const formBody = new URLSearchParams({
     client_id: appId,
     client_secret: appSecret,
+    grant_type: 'authorization_code',
     redirect_uri: redirectUri,
     code,
-  })}`;
+  });
 
-  const tokenRes = await fetch(tokenUrl);
+  const tokenRes = await fetch(INSTAGRAM_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: formBody.toString(),
+  });
   if (!tokenRes.ok) {
     const err = await tokenRes.text();
     throw new Error(`Instagram token exchange failed: ${err}`);
   }
 
-  const tokenData = await tokenRes.json();
-  let accessToken = tokenData.access_token;
-  let expiresIn = tokenData.expires_in || 3600;
+  const tokenJson = await tokenRes.json();
+  const tokenEntry = Array.isArray(tokenJson.data) ? tokenJson.data[0] : tokenJson;
+  let accessToken = tokenEntry?.access_token;
+  let igUserId = tokenEntry?.user_id ? String(tokenEntry.user_id) : null;
+  let expiresIn = tokenEntry?.expires_in || 3600;
 
+  if (!accessToken) {
+    throw new Error('Instagram token exchange did not return an access_token');
+  }
+
+  // Upgrade short-lived token to 60-day long-lived Instagram User token
   try {
-    const longLivedUrl = `${META_LONG_LIVED_URL}?${new URLSearchParams({
-      grant_type: 'fb_exchange_token',
-      client_id: appId,
+    const longLivedUrl = `${INSTAGRAM_GRAPH_URL}/access_token?${new URLSearchParams({
+      grant_type: 'ig_exchange_token',
       client_secret: appSecret,
-      fb_exchange_token: accessToken,
+      access_token: accessToken,
     })}`;
 
     const llRes = await fetch(longLivedUrl);
     if (llRes.ok) {
       const llData = await llRes.json();
-      accessToken = llData.access_token;
-      expiresIn = llData.expires_in || 5184000;
+      if (llData.access_token) accessToken = llData.access_token;
+      if (llData.expires_in) expiresIn = llData.expires_in;
     }
   } catch (e) {
     console.warn('Could not get long-lived Instagram token:', e.message);
   }
 
-  let igUserId = null;
+  // Fetch Instagram Business/Creator profile directly via graph.instagram.com (no Facebook Pages)
   let username = 'Instagram User';
   try {
-    const pagesRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?access_token=${accessToken}`);
-    if (pagesRes.ok) {
-      const pagesData = await pagesRes.json();
-      if (pagesData.data && pagesData.data.length > 0) {
-        const pageId = pagesData.data[0].id;
-        const pageToken = pagesData.data[0].access_token;
-
-        const igRes = await fetch(`https://graph.facebook.com/v21.0/${pageId}?fields=instagram_business_account&access_token=${pageToken}`);
-        if (igRes.ok) {
-          const igData = await igRes.json();
-          igUserId = igData.instagram_business_account?.id;
-        }
-
-        if (igUserId) {
-          const userRes = await fetch(`https://graph.facebook.com/v21.0/${igUserId}?fields=username&access_token=${accessToken}`);
-          if (userRes.ok) {
-            const userData = await userRes.json();
-            username = userData.username ? `@${userData.username}` : 'Instagram User';
-          }
-        }
+    const meRes = await fetch(`${INSTAGRAM_GRAPH_URL}/v21.0/me?fields=user_id,username&access_token=${encodeURIComponent(accessToken)}`);
+    if (meRes.ok) {
+      const meData = await meRes.json();
+      if (meData.user_id || meData.id) {
+        igUserId = String(meData.user_id || meData.id);
+      }
+      if (meData.username) {
+        username = `@${meData.username}`;
       }
     }
   } catch (e) {
@@ -445,6 +449,7 @@ export async function exchangeInstagramCode(code, redirectUri, userId, repo) {
     igUserId,
     expiresAt: Date.now() + expiresIn * 1000,
     username,
+    authType: 'instagram_login',
     connectedAt: Date.now(),
   };
 

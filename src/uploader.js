@@ -509,7 +509,7 @@ export async function uploadToInstagram({
 
   try {
     onProgress?.(`📤 Initializing Instagram Reel container for clip ${clipIndex + 1}...`);
-    const containerUrl = `https://graph.facebook.com/v21.0/${igUserId}/media`;
+    const containerUrl = `https://graph.instagram.com/v21.0/${igUserId}/media`;
     const containerRes = await fetch(containerUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -535,7 +535,7 @@ export async function uploadToInstagram({
     while (status === 'IN_PROGRESS' && attempts < 30) {
       await new Promise(r => setTimeout(r, 2000));
       attempts++;
-      const statusRes = await fetch(`https://graph.facebook.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`);
+      const statusRes = await fetch(`https://graph.instagram.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`);
       if (statusRes.ok) {
         const sData = await statusRes.json();
         status = sData.status_code;
@@ -544,7 +544,7 @@ export async function uploadToInstagram({
     }
 
     onProgress?.('📱 Publishing Reel to Instagram...');
-    const publishRes = await fetch(`https://graph.facebook.com/v21.0/${igUserId}/media_publish`, {
+    const publishRes = await fetch(`https://graph.instagram.com/v21.0/${igUserId}/media_publish`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

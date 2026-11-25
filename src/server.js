@@ -1262,7 +1262,7 @@ export function createApp(options = {}) {
     }
     if (platform === 'instagram') {
       if (!isInstagramEnabled()) {
-        const msg = 'Instagram OAuth is not configured. Set FEATURE_INSTAGRAM=true and Meta App credentials in .env.';
+        const msg = 'Instagram OAuth is not configured. Set FEATURE_INSTAGRAM=true in .env.';
         if (wantsHtml) {
           return res.status(404).send(`<html><body style="font-family:sans-serif;background:#0b0c12;color:#fff;padding:24px"><h3>Instagram Not Configured</h3><p>${msg}</p></body></html>`);
         }
@@ -1270,7 +1270,14 @@ export function createApp(options = {}) {
       }
       const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
       const redirectUri = `${baseUrl}/api/auth/callback/instagram`;
-      const authUrl = getInstagramAuthUrl(redirectUri);
+      const authUrl = getInstagramAuthUrl(redirectUri, req.user.id);
+      if (!authUrl) {
+        const msg = 'INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET missing in .env (use Instagram API with Instagram Login — no Facebook needed).';
+        if (wantsHtml) {
+          return res.status(400).send(`<html><body style="font-family:sans-serif;background:#0b0c12;color:#fff;padding:24px"><h3>Instagram App Not Configured</h3><p>${msg}</p></body></html>`);
+        }
+        return res.status(400).json({ error: msg, needsSetup: true });
+      }
       if (wantsHtml) {
         return res.redirect(authUrl);
       }
@@ -1317,11 +1324,37 @@ export function createApp(options = {}) {
     }
   });
 
-  app.get('/api/auth/callback/instagram', (req, res) => {
+  app.get('/api/auth/callback/instagram', async (req, res) => {
     if (!isInstagramEnabled()) {
       return res.status(404).send('Instagram feature is disabled');
     }
-    res.send('<html><body>Instagram Connected</body></html>');
+    const { state, code, error, error_description } = req.query;
+    if (error) {
+      return res.status(400).send(`Instagram OAuth error: ${error_description || error}`);
+    }
+    if (!code) {
+      return res.status(400).send('Missing Instagram authorization code');
+    }
+    let userId = req.user?.id || null;
+    if (state) {
+      const stateResult = consumeOAuthState(String(state));
+      if (stateResult?.valid && stateResult.userId) {
+        userId = stateResult.userId;
+      }
+    }
+    if (!userId) {
+      return res.status(400).send('Invalid or expired OAuth session state. Please retry from Settings.');
+    }
+
+    const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+    const redirectUri = `${baseUrl}/api/auth/callback/instagram`;
+    try {
+      await exchangeInstagramCode(String(code), redirectUri, userId, repo);
+      res.send('<!DOCTYPE html><html><body><h2>Instagram Connected</h2><p>You can close this window now.</p><script>if(window.opener){window.opener.postMessage({type:"oauth_callback",platform:"instagram",success:true},"*");window.close();}</script></body></html>');
+    } catch (err) {
+      logger.error({ err, userId }, 'Instagram OAuth exchange failed');
+      res.status(400).send(`Instagram connection failed: ${err.message}`);
+    }
   });
 
   app.post('/api/disconnect/:platform', requireAuth, async (req, res) => {
