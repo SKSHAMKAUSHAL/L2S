@@ -40,6 +40,7 @@ import {
   validateSourceResolution,
 } from './video/quality_profiles.js';
 import { detectEncoder } from './renderer.js';
+import { detectHardwareAndRecommendedModel } from './ai/hardware_detector.js';
 
 // Database, Auth & Queue
 import { getDb, createDbRepository } from './db/index.js';
@@ -139,6 +140,7 @@ export function createApp(options = {}) {
   // Helmet Security Headers & Content Security Policy (No unsafe-inline for scripts)
   app.use(
     helmet({
+      referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
       contentSecurityPolicy: {
         directives: {
           defaultSrc: ["'self'"],
@@ -325,6 +327,31 @@ export function createApp(options = {}) {
   });
 
   // ─── Protected Routes (requireAuth) ───────────────────
+
+  // Host Hardware & Diagnostics
+  app.get('/api/hardware', requireAuth, (req, res) => {
+    const hw = detectHardwareAndRecommendedModel();
+    const encoder = detectEncoder();
+    res.json({
+      ...hw,
+      encoder,
+      cpu: {
+        cores: hw.cpuCores,
+        model: hw.cpuModel,
+      },
+      ram: {
+        totalGB: hw.totalRamGB,
+      },
+      gpu: {
+        ...hw.gpu,
+        vramGB: hw.gpu.vramGB,
+        name: hw.gpu.hasNvidia && hw.gpu.name ? hw.gpu.name : (encoder && encoder !== 'libx264' ? encoder : 'Integrated / CPU'),
+        encoder,
+      },
+      recommendedModel: hw.recommendedModel,
+      tier: hw.tier,
+    });
+  });
 
   // Account Deletion
   app.delete('/api/account', requireAuth, (req, res) => {

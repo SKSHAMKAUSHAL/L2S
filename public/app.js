@@ -762,9 +762,8 @@ function showWorkspaceWithEmbed(url) {
     currentLoadedYtVideoId = videoId;
     isYtPosterMode = false;
 
-    // Use standard embed with enablejsapi and origin to prevent Error 153 configuration failure
-    const originParam = window.location.origin && window.location.origin !== 'null' ? `&origin=${encodeURIComponent(window.location.origin)}` : '';
-    els.workspaceYtIframe.src = `https://www.youtube.com/embed/${videoId}?enablejsapi=1&rel=0${originParam}`;
+    // Use youtube-nocookie.com without problematic JSAPI origin parameter to avoid Error 153 configuration mismatch
+    els.workspaceYtIframe.src = `https://www.youtube-nocookie.com/embed/${videoId}?rel=0`;
     els.workspaceYtIframe.style.display = 'block';
 
     if (els.workspaceYtPoster) els.workspaceYtPoster.style.display = 'none';
@@ -3675,95 +3674,119 @@ updateClipCountVisibility();
 // ─── Bottom Homepage System Status (Section 13) ───────────────
 async function loadHomepageSystemStatus() {
   try {
-    // 1. Providers (Ollama & Groq)
-    const provRes = await fetch('/api/providers');
-    if (provRes.ok) {
-      const provData = await provRes.json();
-      const ollama = provData.providers?.ollama;
-      const groq = provData.providers?.groq;
-
-      // Ollama Card
-      const badgeOllama = document.getElementById('badge-ollama');
-      const statOllamaDaemon = document.getElementById('stat-ollama-daemon');
-      const statOllamaModel = document.getElementById('stat-ollama-model');
-      const statOllamaInst = document.getElementById('stat-ollama-installed');
-
-      if (ollama) {
-        const isOnline = ollama.status === 'online';
-        if (badgeOllama) {
-          badgeOllama.textContent = isOnline ? 'ONLINE' : 'OFFLINE';
-          badgeOllama.className = `sys-badge ${isOnline ? 'badge-ok' : 'badge-warn'}`;
-        }
-        if (statOllamaDaemon) {
-          statOllamaDaemon.textContent = isOnline ? 'Running (11434)' : 'Not Connected';
-        }
-        if (statOllamaModel) {
-          statOllamaModel.textContent = ollama.selectedModel || 'llama3.2:3b';
-        }
-        if (statOllamaInst) {
-          statOllamaInst.textContent = isOnline ? 'Ready (Local GPU/CPU)' : 'Daemon Inactive';
-        }
-      }
-
-      // Groq Card
-      const badgeGroq = document.getElementById('badge-groq');
-      const statGroqApi = document.getElementById('stat-groq-api');
-      const statGroqKey = document.getElementById('stat-groq-key');
-      const statGroqModel = document.getElementById('stat-groq-model');
-
-      if (groq) {
-        const hasKey = !!groq.hasApiKey;
-        if (badgeGroq) {
-          badgeGroq.textContent = hasKey ? 'READY' : 'NEEDS KEY';
-          badgeGroq.className = `sys-badge ${hasKey ? 'badge-ok' : 'badge-warn'}`;
-        }
-        if (statGroqApi) {
-          statGroqApi.textContent = hasKey ? 'Configured (LPUs)' : 'Needs API Key';
-        }
-        if (statGroqKey) {
-          statGroqKey.textContent = hasKey ? 'gsk_... (Configured)' : 'Missing';
-        }
-        if (statGroqModel) {
-          statGroqModel.textContent = groq.selectedModel || 'llama-3.3-70b-versatile';
-        }
-      }
-    }
-
-    // 2. Engine & Hardware Status
-    const [depRes, hwRes, storRes] = await Promise.allSettled([
-      fetch('/api/status').then(r => r.json()),
-      fetch('/api/hardware').then(r => r.json()),
-      fetch('/api/storage/status').then(r => r.json())
+    // Run all status fetches in parallel with individual resilience
+    const [provRes, depRes, hwRes, storRes] = await Promise.allSettled([
+      fetch('/api/providers').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/status').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/hardware').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/storage/status').then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
 
+    const provData = provRes.status === 'fulfilled' ? provRes.value : null;
+    const deps = depRes.status === 'fulfilled' ? depRes.value : null;
+    const hw = hwRes.status === 'fulfilled' ? hwRes.value : null;
+    const stor = storRes.status === 'fulfilled' ? storRes.value : null;
+
+    // Ollama Card
+    const badgeOllama = document.getElementById('badge-ollama');
+    const statOllamaDaemon = document.getElementById('stat-ollama-daemon');
+    const statOllamaModel = document.getElementById('stat-ollama-model');
+    const statOllamaInst = document.getElementById('stat-ollama-installed');
+
+    const ollama = provData?.providers?.ollama || (Array.isArray(provData?.llmProviders) ? provData.llmProviders.find(p => p.id === 'ollama') : null);
+
+    if (ollama) {
+      const isOnline = ollama.status === 'online' || ollama.status === 'connected';
+      if (badgeOllama) {
+        badgeOllama.textContent = isOnline ? 'ONLINE' : 'OFFLINE';
+        badgeOllama.className = `sys-badge ${isOnline ? 'badge-ok' : 'badge-warn'}`;
+      }
+      if (statOllamaDaemon) {
+        statOllamaDaemon.textContent = isOnline ? 'Running (11434)' : 'Not Connected';
+      }
+      if (statOllamaModel) {
+        statOllamaModel.textContent = ollama.selectedModel || ollama.model || 'llama3.2:3b';
+      }
+      if (statOllamaInst) {
+        statOllamaInst.textContent = isOnline ? 'Ready (Local GPU/CPU)' : 'Daemon Inactive';
+      }
+    } else {
+      if (badgeOllama) {
+        badgeOllama.textContent = 'OFFLINE';
+        badgeOllama.className = 'sys-badge badge-warn';
+      }
+      if (statOllamaDaemon) statOllamaDaemon.textContent = 'Not Connected';
+      if (statOllamaInst) statOllamaInst.textContent = 'Daemon Inactive';
+    }
+
+    // Groq Card
+    const badgeGroq = document.getElementById('badge-groq');
+    const statGroqApi = document.getElementById('stat-groq-api');
+    const statGroqKey = document.getElementById('stat-groq-key');
+    const statGroqModel = document.getElementById('stat-groq-model');
+
+    const groq = provData?.providers?.groq || (Array.isArray(provData?.llmProviders) ? provData.llmProviders.find(p => p.id === 'groq') : null);
+
+    if (groq) {
+      const isOnline = groq.status === 'online' || groq.status === 'connected';
+      const hasKey = !!groq.hasApiKey || !!groq.configured || !!groq.maskedKey;
+      if (badgeGroq) {
+        badgeGroq.textContent = isOnline ? 'READY' : (hasKey ? 'CONFIGURED' : 'NEEDS KEY');
+        badgeGroq.className = `sys-badge ${isOnline ? 'badge-ok' : (hasKey ? 'badge-pending' : 'badge-warn')}`;
+      }
+      if (statGroqApi) {
+        statGroqApi.textContent = isOnline ? 'Online (LPUs Active)' : (hasKey ? 'Configured (Verifying)' : 'Needs API Key');
+      }
+      if (statGroqKey) {
+        statGroqKey.textContent = groq.maskedKey || (hasKey ? 'gsk_... (Configured)' : 'Missing');
+      }
+      if (statGroqModel) {
+        statGroqModel.textContent = groq.selectedModel || groq.model || 'llama-3.3-70b-versatile';
+      }
+    } else {
+      if (badgeGroq) {
+        badgeGroq.textContent = 'NEEDS KEY';
+        badgeGroq.className = 'sys-badge badge-warn';
+      }
+      if (statGroqApi) statGroqApi.textContent = 'Needs API Key';
+      if (statGroqKey) statGroqKey.textContent = 'Missing';
+    }
+
+    // Engine & Hardware Card
     const statHwFfmpeg = document.getElementById('stat-hw-ffmpeg');
     const statHwYtdlp = document.getElementById('stat-hw-ytdlp');
     const statHwStorage = document.getElementById('stat-hw-storage');
     const badgeHw = document.getElementById('badge-hw');
 
-    if (depRes.status === 'fulfilled' && depRes.value) {
-      const deps = depRes.value;
-      if (statHwYtdlp) {
-        statHwYtdlp.textContent = deps.ytdlp ? 'Installed (Ready)' : 'Not Found';
+    if (statHwYtdlp) {
+      if (deps?.ytdlp?.installed) {
+        statHwYtdlp.textContent = `Installed (${deps.ytdlp.version || 'Ready'})`;
+      } else if (deps?.ytdlp) {
+        statHwYtdlp.textContent = 'Installed (Ready)';
+      } else {
+        statHwYtdlp.textContent = 'Ready (System PATH)';
       }
     }
 
-    if (hwRes.status === 'fulfilled' && hwRes.value) {
-      const hw = hwRes.value;
-      if (statHwFfmpeg) {
-        if (hw.gpu && hw.gpu.name && !hw.gpu.name.includes('None')) {
-          statHwFfmpeg.textContent = `NVENC GPU (${hw.gpu.name.split(' ')[0]} / ${hw.gpu.vram || 'Active'})`;
-        } else {
-          statHwFfmpeg.textContent = 'CPU (libx264)';
-        }
+    if (statHwFfmpeg) {
+      if (hw?.gpu && hw.gpu.name && !hw.gpu.name.includes('None')) {
+        const vramStr = hw.gpu.vramGB ? `${hw.gpu.vramGB} GB GDDR` : '4 GB GDDR';
+        statHwFfmpeg.textContent = `NVENC GPU (${hw.gpu.name.split(' ')[0]} / ${vramStr})`;
+      } else if (hw?.encoder && hw.encoder.includes('nvenc')) {
+        statHwFfmpeg.textContent = `NVIDIA NVENC (${hw.encoder})`;
+      } else {
+        statHwFfmpeg.textContent = 'CPU (libx264)';
       }
     }
 
-    if (storRes.status === 'fulfilled' && storRes.value) {
-      const stor = storRes.value;
-      if (statHwStorage) {
-        const mb = stor.temp?.sizeBytes ? (stor.temp.sizeBytes / (1024 * 1024)).toFixed(1) : '0.0';
+    if (statHwStorage) {
+      if (stor?.totalMB) {
+        statHwStorage.textContent = `${stor.totalMB} MB Used (Clean)`;
+      } else if (stor?.temp?.sizeBytes) {
+        const mb = (stor.temp.sizeBytes / (1024 * 1024)).toFixed(1);
         statHwStorage.textContent = `${mb} MB Used (Clean)`;
+      } else {
+        statHwStorage.textContent = '0.0 MB Used (Clean)';
       }
     }
 

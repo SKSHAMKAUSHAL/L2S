@@ -24,15 +24,19 @@ describe('Step 8: Token Encryption & Key Rotation (crypto.test.js)', () => {
     const plaintext = 'sensitive_oauth_token';
     const encrypted = JSON.parse(encryptToken(plaintext));
 
-    // 1. Modify ciphertext
-    const tamperedCipher = { ...encrypted, ciphertext: encrypted.ciphertext.slice(0, -2) + '00' };
+    // 1. Modify ciphertext (flip last character to ensure tamper)
+    const lastChar = encrypted.ciphertext.slice(-1);
+    const flip = lastChar === '0' ? '1' : '0';
+    const tamperedCipher = { ...encrypted, ciphertext: encrypted.ciphertext.slice(0, -1) + flip };
     assert.throws(
       () => decryptToken(JSON.stringify(tamperedCipher)),
       /Unsupported state or unable to authenticate data|bad decrypt|auth/i
     );
 
-    // 2. Modify tag
-    const tamperedTag = { ...encrypted, tag: '00' + encrypted.tag.slice(2) };
+    // 2. Modify tag (flip first character to guarantee tamper)
+    const firstTagChar = encrypted.tag.slice(0, 1);
+    const flipTag = firstTagChar === '0' ? '1' : '0';
+    const tamperedTag = { ...encrypted, tag: flipTag + encrypted.tag.slice(1) };
     assert.throws(
       () => decryptToken(JSON.stringify(tamperedTag)),
       /Unsupported state or unable to authenticate data|bad decrypt|auth/i

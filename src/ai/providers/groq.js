@@ -39,7 +39,7 @@ export class GroqProvider extends BaseLLMProvider {
 
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 6000);
+      const timeout = setTimeout(() => controller.abort(), 3000);
 
       const res = await fetch('https://api.groq.com/openai/v1/models', {
         headers: { Authorization: `Bearer ${key}` },
@@ -89,9 +89,13 @@ export class GroqProvider extends BaseLLMProvider {
     const key = this.getApiKey();
     if (!key) return [];
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2500);
       const res = await fetch('https://api.groq.com/openai/v1/models', {
         headers: { Authorization: `Bearer ${key}` },
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       if (!res.ok) return [];
       const data = await res.json();
       if (!Array.isArray(data.data)) return [];

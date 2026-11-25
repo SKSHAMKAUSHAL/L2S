@@ -128,55 +128,76 @@ class AIProviderRegistry {
     const hardware = detectHardwareAndRecommendedModel();
     const systemWarnings = [];
 
-    const llmList = [];
-    for (const [id, provider] of this.llmProviders.entries()) {
-      const check = await provider.testConnection().catch(err => ({ ok: false, error: err.message, warning: err.message }));
-      const availableModels = await this.getAvailableModels(id).catch(() => [provider.model]);
-      const isActive = id === this.activeLLMId;
+    const llmEntries = Array.from(this.llmProviders.entries());
+    const llmList = await Promise.all(
+      llmEntries.map(async ([id, provider]) => {
+        const check = await provider.testConnection().catch(err => ({ ok: false, error: err.message, warning: err.message }));
+        const availableModels = await this.getAvailableModels(id).catch(() => [provider.model]);
+        const isActive = id === this.activeLLMId;
 
-      const warning = check.warning || (!provider.isConfigured() ? `${provider.name} is missing configuration.` : null);
-      if (isActive && warning) {
-        systemWarnings.push(`Active LLM (${provider.name}): ${warning}`);
-      }
+        const warning = check.warning || (!provider.isConfigured() ? `${provider.name} is missing configuration.` : null);
+        if (isActive && warning) {
+          systemWarnings.push(`Active LLM (${provider.name}): ${warning}`);
+        }
 
-      llmList.push({
-        id,
-        name: provider.name,
-        type: provider.type,
-        model: provider.model,
-        availableModels,
-        active: isActive,
-        configured: provider.isConfigured(),
-        status: check.ok ? 'connected' : 'offline',
-        maskedKey: typeof provider.getMaskedKey === 'function' ? provider.getMaskedKey() : null,
-        warning,
-        details: check,
-      });
-    }
+        return {
+          id,
+          name: provider.name,
+          type: provider.type,
+          model: provider.model,
+          availableModels,
+          active: isActive,
+          configured: provider.isConfigured(),
+          status: check.ok ? 'connected' : 'offline',
+          maskedKey: typeof provider.getMaskedKey === 'function' ? provider.getMaskedKey() : null,
+          warning,
+          details: check,
+        };
+      })
+    );
 
-    const sttList = [];
-    for (const [id, provider] of this.sttProviders.entries()) {
-      const check = await provider.testConnection().catch(err => ({ ok: false, error: err.message, warning: err.message }));
-      const isActive = id === this.activeSTTId;
+    const sttEntries = Array.from(this.sttProviders.entries());
+    const sttList = await Promise.all(
+      sttEntries.map(async ([id, provider]) => {
+        const check = await provider.testConnection().catch(err => ({ ok: false, error: err.message, warning: err.message }));
+        const isActive = id === this.activeSTTId;
 
-      const warning = check.warning || (!provider.isConfigured() ? `${provider.name} is missing configuration.` : null);
-      if (isActive && warning) {
-        systemWarnings.push(`Active STT (${provider.name}): ${warning}`);
-      }
+        const warning = check.warning || (!provider.isConfigured() ? `${provider.name} is missing configuration.` : null);
+        if (isActive && warning) {
+          systemWarnings.push(`Active STT (${provider.name}): ${warning}`);
+        }
 
-      sttList.push({
-        id,
-        name: provider.name,
-        type: provider.type,
-        model: provider.model || provider.modelSize,
-        active: isActive,
-        configured: provider.isConfigured(),
-        status: check.ok ? 'connected' : 'offline',
-        maskedKey: typeof provider.getMaskedKey === 'function' ? provider.getMaskedKey() : null,
-        warning,
-        details: check,
-      });
-    }
+        return {
+          id,
+          name: provider.name,
+          type: provider.type,
+          model: provider.model || provider.modelSize,
+          active: isActive,
+          configured: provider.isConfigured(),
+          status: check.ok ? 'connected' : 'offline',
+          maskedKey: typeof provider.getMaskedKey === 'function' ? provider.getMaskedKey() : null,
+          warning,
+          details: check,
+        };
+      })
+    );
+
+    const ollamaEntry = llmList.find(p => p.id === 'ollama');
+    const groqEntry = llmList.find(p => p.id === 'groq');
+    const providers = {
+      ollama: {
+        ...ollamaEntry,
+        status: ollamaEntry?.status === 'connected' ? 'online' : (ollamaEntry?.status || 'offline'),
+        hasApiKey: false,
+        selectedModel: ollamaEntry?.model,
+      },
+      groq: {
+        ...groqEntry,
+        status: groqEntry?.status === 'connected' ? 'online' : (groqEntry?.status || 'offline'),
+        hasApiKey: !!groqEntry?.configured || !!groqEntry?.maskedKey,
+        selectedModel: groqEntry?.model,
+      },
+    };
 
     return {
       activeLLM: this.activeLLMId,
@@ -184,6 +205,7 @@ class AIProviderRegistry {
       allowCloudFallback: this.allowCloudFallback,
       warnings: systemWarnings,
       hardware,
+      providers,
       llmProviders: llmList,
       sttProviders: sttList,
     };

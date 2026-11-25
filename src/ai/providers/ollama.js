@@ -64,7 +64,10 @@ export class OllamaProvider extends BaseLLMProvider {
 
   async fetchAvailableModels() {
     try {
-      const res = await fetch(`${this.url}/api/tags`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`${this.url}/api/tags`, { signal: controller.signal });
+      clearTimeout(timeout);
       if (res.ok) {
         const data = await res.json();
         const installed = (data.models || []).map(m => m.name);
