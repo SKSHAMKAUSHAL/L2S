@@ -359,7 +359,6 @@ export function getInstagramAuthUrl(redirectUri, userId = null) {
     : crypto.randomBytes(16).toString('hex');
   const params = new URLSearchParams({
     enable_fb_login: '0',
-    force_authentication: '1',
     client_id: appId,
     redirect_uri: redirectUri,
     response_type: 'code',
