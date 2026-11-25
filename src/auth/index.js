@@ -94,6 +94,8 @@ export async function loginUser(repo, { email, password }) {
   };
 }
 
+export const CSRF_COOKIE_NAME = 'XSRF-TOKEN';
+
 export function setSessionCookie(res, sessionToken) {
   res.cookie(SESSION_COOKIE_NAME, sessionToken, {
     httpOnly: true,
@@ -113,12 +115,40 @@ export function clearSessionCookie(res) {
   });
 }
 
+export function setCsrfCookie(res, csrfToken) {
+  if (!res || typeof res.cookie !== 'function' || !csrfToken) return;
+  res.cookie(CSRF_COOKIE_NAME, csrfToken, {
+    httpOnly: false, // Intentionally readable by client JS for CSRF Double Submit
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: SESSION_MAX_AGE_MS,
+    path: '/'
+  });
+}
+
+export function clearCsrfCookie(res) {
+  if (!res || typeof res.clearCookie !== 'function') return;
+  res.clearCookie(CSRF_COOKIE_NAME, {
+    httpOnly: false,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/'
+  });
+}
+
 export function createAuthMiddleware(repo) {
   return function requireAuth(req, res, next) {
     // Check session cookie or Authorization header
     let rawToken = req.cookies ? req.cookies[SESSION_COOKIE_NAME] : null;
     if (!rawToken && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
       rawToken = req.headers.authorization.slice(7).trim();
+    }
+    // Fallback: parse raw Cookie header if available
+    if (!rawToken && req.headers && req.headers.cookie) {
+      const match = req.headers.cookie.match(new RegExp('(?:^|;\\s*)' + SESSION_COOKIE_NAME + '=([^;]*)'));
+      if (match && match[1]) {
+        rawToken = decodeURIComponent(match[1]).trim();
+      }
     }
 
     if (!rawToken) {
@@ -128,8 +158,12 @@ export function createAuthMiddleware(repo) {
     const session = repo.getSession(rawToken);
     if (!session) {
       clearSessionCookie(res);
+      clearCsrfCookie(res);
       return res.status(401).json({ error: 'Session expired or invalid' });
     }
+
+    // Keep client-readable XSRF-TOKEN cookie synchronized with active session
+    setCsrfCookie(res, session.csrf_token);
 
     // CSRF Check for state-mutating HTTP methods
     const mutatingMethods = ['POST', 'PUT', 'DELETE', 'PATCH'];
@@ -137,12 +171,14 @@ export function createAuthMiddleware(repo) {
       // Bearer token authentication is inherently immune to ambient-cookie CSRF attacks
       const isBearerAuth = req.headers.authorization && req.headers.authorization.startsWith('Bearer ');
       if (!isBearerAuth) {
-        const csrfHeader = req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || (req.body && req.body._csrf);
+        const rawCsrf = req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || (req.body && req.body._csrf);
+        const csrfHeader = typeof rawCsrf === 'string' ? rawCsrf.trim() : rawCsrf;
         if (!csrfHeader || csrfHeader !== session.csrf_token) {
           return res.status(403).json({
             error: 'Invalid or missing CSRF token',
             code: 'CSRF_INVALID',
-            message: 'Your security CSRF token is missing or expired. Please refresh the page.'
+            message: 'Your security CSRF token is missing or expired. Please refresh the page.',
+            csrfToken: session.csrf_token
           });
         }
       }

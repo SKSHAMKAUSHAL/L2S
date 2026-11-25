@@ -65,6 +65,7 @@ authForm?.addEventListener('submit', async (e) => {
     // Store CSRF token for seamless API requests
     if (data && data.csrfToken) {
       localStorage.setItem('l2s_csrf_token', data.csrfToken);
+      document.cookie = `XSRF-TOKEN=${encodeURIComponent(data.csrfToken)}; path=/; SameSite=Lax`;
     }
 
     // Redirect to main application

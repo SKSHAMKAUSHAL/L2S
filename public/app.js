@@ -3,57 +3,113 @@
 // ═══════════════════════════════════════════
 
 // ─── Production-Grade Resilient CSRF Interceptor ────────────
-let csrfToken = localStorage.getItem('l2s_csrf_token') || null;
+let csrfTokenMemory = null;
 
-const originalFetch = window.fetch;
+function getCsrfToken() {
+  // 1. Synchronously read standard XSRF-TOKEN cookie
+  if (typeof document !== 'undefined' && document.cookie) {
+    const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/);
+    if (match && match[1]) {
+      const decoded = decodeURIComponent(match[1]).trim();
+      if (decoded) {
+        csrfTokenMemory = decoded;
+        return decoded;
+      }
+    }
+  }
+  // 2. Read from localStorage
+  try {
+    const local = localStorage.getItem('l2s_csrf_token');
+    if (local && local.trim()) {
+      csrfTokenMemory = local.trim();
+      return csrfTokenMemory;
+    }
+  } catch (e) {}
+
+  return csrfTokenMemory || null;
+}
+
+function updateStoredCsrfToken(newToken) {
+  if (!newToken || typeof newToken !== 'string') return;
+  const clean = newToken.trim();
+  csrfTokenMemory = clean;
+  try {
+    localStorage.setItem('l2s_csrf_token', clean);
+  } catch (e) {}
+  try {
+    if (typeof document !== 'undefined') {
+      document.cookie = `XSRF-TOKEN=${encodeURIComponent(clean)}; path=/; SameSite=Lax`;
+    }
+  } catch (e) {}
+}
+
+// Bind original fetch to window to prevent 'Illegal invocation' exceptions in Chrome/WebKit
+const originalFetch = window.fetch ? window.fetch.bind(window) : null;
+
 window.fetch = async function (resource, init = {}) {
   const method = (init && init.method ? init.method : 'GET').toUpperCase();
 
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
     init = init || {};
     init.headers = init.headers || {};
+    const token = getCsrfToken();
 
-    if (init.headers instanceof Headers) {
-      if (csrfToken && !init.headers.has('x-csrf-token')) {
-        init.headers.set('x-csrf-token', csrfToken);
-      }
-    } else if (Array.isArray(init.headers)) {
-      if (csrfToken && !init.headers.some(([k]) => k.toLowerCase() === 'x-csrf-token')) {
-        init.headers.push(['x-csrf-token', csrfToken]);
-      }
-    } else {
-      if (csrfToken && !init.headers['x-csrf-token'] && !init.headers['X-CSRF-Token']) {
-        init.headers['x-csrf-token'] = csrfToken;
+    if (token) {
+      if (init.headers instanceof Headers) {
+        if (!init.headers.has('x-csrf-token')) {
+          init.headers.set('x-csrf-token', token);
+        }
+      } else if (Array.isArray(init.headers)) {
+        const idx = init.headers.findIndex(([k]) => k.toLowerCase() === 'x-csrf-token');
+        if (idx >= 0) init.headers[idx][1] = token;
+        else init.headers.push(['x-csrf-token', token]);
+      } else {
+        delete init.headers['X-CSRF-Token'];
+        delete init.headers['X-Csrf-Token'];
+        delete init.headers['x-xsrf-token'];
+        delete init.headers['X-XSRF-Token'];
+        init.headers['x-csrf-token'] = token;
       }
     }
   }
 
-  let response = await originalFetch.apply(this, [resource, init]);
+  let response = await originalFetch(resource, init);
 
-  // Transparent auto-recovery: If 403 CSRF error occurs, fetch fresh token and retry once
-  if (response.status === 403 && typeof resource === 'string' && resource.startsWith('/api/') && !resource.startsWith('/api/auth/')) {
+  // Transparent auto-recovery: If 403 CSRF error occurs, heal token and retry once
+  if (response.status === 403 && typeof resource === 'string' && resource.startsWith('/api/') && !resource.startsWith('/api/auth/csrf')) {
     try {
       const cloned = response.clone();
       const errData = await cloned.json().catch(() => ({}));
-      if (errData && errData.error && errData.error.toLowerCase().includes('csrf')) {
-        const csrfRes = await originalFetch('/api/auth/csrf');
-        if (csrfRes.ok) {
-          const { csrfToken: freshToken } = await csrfRes.json().catch(() => ({}));
-          if (freshToken) {
-            csrfToken = freshToken;
-            localStorage.setItem('l2s_csrf_token', freshToken);
+      const isCsrfErr = (errData && errData.code === 'CSRF_INVALID') ||
+                        (errData && errData.error && errData.error.toLowerCase().includes('csrf'));
 
-            if (init.headers instanceof Headers) {
-              init.headers.set('x-csrf-token', freshToken);
-            } else if (Array.isArray(init.headers)) {
-              const idx = init.headers.findIndex(([k]) => k.toLowerCase() === 'x-csrf-token');
-              if (idx >= 0) init.headers[idx][1] = freshToken;
-              else init.headers.push(['x-csrf-token', freshToken]);
-            } else {
-              init.headers['x-csrf-token'] = freshToken;
-            }
-            response = await originalFetch.apply(this, [resource, init]);
+      if (isCsrfErr) {
+        let freshToken = errData.csrfToken || null;
+        if (!freshToken) {
+          const csrfRes = await originalFetch('/api/auth/csrf', { credentials: 'same-origin' });
+          if (csrfRes.ok) {
+            const csrfJson = await csrfRes.json().catch(() => ({}));
+            freshToken = csrfJson.csrfToken;
           }
+        }
+
+        if (freshToken) {
+          updateStoredCsrfToken(freshToken);
+
+          if (init.headers instanceof Headers) {
+            init.headers.set('x-csrf-token', freshToken);
+          } else if (Array.isArray(init.headers)) {
+            const idx = init.headers.findIndex(([k]) => k.toLowerCase() === 'x-csrf-token');
+            if (idx >= 0) init.headers[idx][1] = freshToken;
+            else init.headers.push(['x-csrf-token', freshToken]);
+          } else {
+            delete init.headers['X-CSRF-Token'];
+            delete init.headers['X-Csrf-Token'];
+            delete init.headers['x-xsrf-token'];
+            delete init.headers['X-XSRF-Token'];
+            init.headers['x-csrf-token'] = freshToken;
+          }
+          response = await originalFetch(resource, init);
         }
       }
     } catch (e) {
@@ -855,6 +911,11 @@ generateBtnTarget?.addEventListener('click', async (e) => {
 
     const data = await res.json();
     if (!res.ok) {
+      if (res.status === 401) {
+        showToast('⚠️ Session expired or sign-in required. Please log in.', 'warning');
+        setTimeout(() => { window.location.href = '/login.html'; }, 800);
+        return;
+      }
       if (data.error === 'MISSING_API_KEY') {
         showGlobalAlert(data.message);
         throw new Error(data.message);
@@ -4714,8 +4775,7 @@ async function initAuthSession() {
       if (data && data.user) {
         currentAuthUser = data.user;
         if (data.csrfToken) {
-          csrfToken = data.csrfToken;
-          localStorage.setItem('l2s_csrf_token', csrfToken);
+          updateStoredCsrfToken(data.csrfToken);
         }
         if (emailEl) emailEl.textContent = data.user.email;
         if (planEl) {
@@ -4740,8 +4800,9 @@ document.getElementById('btn-header-logout')?.addEventListener('click', async (e
   e.preventDefault();
   try {
     await fetch('/api/auth/logout', { method: 'POST' });
-    csrfToken = null;
-    localStorage.removeItem('l2s_csrf_token');
+    csrfTokenMemory = null;
+    try { localStorage.removeItem('l2s_csrf_token'); } catch (e) {}
+    try { document.cookie = 'XSRF-TOKEN=; path=/; max-age=0; SameSite=Lax'; } catch (e) {}
     showToast('Logged out of your account', 'info');
     setTimeout(() => {
       window.location.href = '/login.html';

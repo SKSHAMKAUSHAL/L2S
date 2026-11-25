@@ -213,15 +213,17 @@ describe('Step 7: Authorization & Cross-Tenant Isolation (tests/authz.test.js)',
   });
 
   it('5. CSRF protection accepts valid tokens, rejects invalid/missing, and supports GET /api/auth/csrf', async () => {
-    // 5a. GET /api/auth/csrf returns the session's CSRF token
+    // 5a. GET /api/auth/csrf returns the session's CSRF token and sets readable XSRF-TOKEN cookie
     const csrfRes = await fetch(`${baseUrl}/api/auth/csrf`, {
       headers: { 'Cookie': cookieA }
     });
     assert.strictEqual(csrfRes.status, 200);
     const csrfData = await csrfRes.json();
     assert.strictEqual(csrfData.csrfToken, csrfA);
+    const setCookie = csrfRes.headers.get('set-cookie') || '';
+    assert.ok(setCookie.includes('XSRF-TOKEN='), 'Should set client-readable XSRF-TOKEN cookie');
 
-    // 5b. Mutating POST without CSRF token returns 403
+    // 5b. Mutating POST without CSRF token returns 403 and provides csrfToken for auto-healing
     const badRes = await fetch(`${baseUrl}/api/process/stop`, {
       method: 'POST',
       headers: {
@@ -233,6 +235,7 @@ describe('Step 7: Authorization & Cross-Tenant Isolation (tests/authz.test.js)',
     assert.strictEqual(badRes.status, 403);
     const badData = await badRes.json();
     assert.ok(badData.error.includes('CSRF'));
+    assert.strictEqual(badData.csrfToken, csrfA, 'Should provide session csrfToken for zero-delay client healing');
 
     // 5c. Mutating POST with valid x-csrf-token header succeeds (not 403)
     const goodRes = await fetch(`${baseUrl}/api/process/stop`, {
@@ -256,5 +259,22 @@ describe('Step 7: Authorization & Cross-Tenant Isolation (tests/authz.test.js)',
       body: JSON.stringify({})
     });
     assert.strictEqual(bearerRes.status, 200);
+
+    // 5e. /api/video-info handles both GET and POST with requireAuth and CSRF
+    const videoGetRes = await fetch(`${baseUrl}/api/video-info`, {
+      headers: { 'Cookie': cookieA }
+    });
+    assert.strictEqual(videoGetRes.status, 400); // 400 parameter required, not 404 or 403
+
+    const videoPostRes = await fetch(`${baseUrl}/api/video-info`, {
+      method: 'POST',
+      headers: {
+        'Cookie': cookieA,
+        'Content-Type': 'application/json',
+        'x-csrf-token': csrfA
+      },
+      body: JSON.stringify({})
+    });
+    assert.strictEqual(videoPostRes.status, 400); // 400 parameter required, not 404 or 403
   });
 });

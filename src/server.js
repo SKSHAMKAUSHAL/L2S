@@ -48,8 +48,11 @@ import {
   loginUser,
   setSessionCookie,
   clearSessionCookie,
+  setCsrfCookie,
+  clearCsrfCookie,
   createAuthMiddleware,
   SESSION_COOKIE_NAME,
+  CSRF_COOKIE_NAME,
 } from './auth/index.js';
 import {
   initQueue,
@@ -162,7 +165,7 @@ export function createApp(options = {}) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token, X-Request-Id, Authorization');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token, X-XSRF-Token, X-Request-Id, Authorization');
       } else {
         if (req.method === 'OPTIONS') {
           return res.status(403).json({ error: 'CORS forbidden' });
@@ -183,10 +186,22 @@ export function createApp(options = {}) {
 
   // Unauthenticated page load redirect to /login.html
   app.get('/', (req, res, next) => {
-    const rawToken = req.cookies ? req.cookies[SESSION_COOKIE_NAME] : null;
-    if (!rawToken || !repo.getSession(rawToken)) {
+    let rawToken = req.cookies ? req.cookies[SESSION_COOKIE_NAME] : null;
+    if (!rawToken && req.headers && req.headers.cookie) {
+      const match = req.headers.cookie.match(new RegExp('(?:^|;\\s*)' + SESSION_COOKIE_NAME + '=([^;]*)'));
+      if (match && match[1]) rawToken = decodeURIComponent(match[1]).trim();
+    }
+    if (!rawToken) {
       return res.redirect('/login.html');
     }
+    const session = repo.getSession(rawToken);
+    if (!session) {
+      clearSessionCookie(res);
+      clearCsrfCookie(res);
+      return res.redirect('/login.html');
+    }
+    // Synchronously set XSRF-TOKEN cookie so client-side JavaScript can read it immediately on first load
+    setCsrfCookie(res, session.csrf_token);
     next();
   });
 
@@ -211,6 +226,7 @@ export function createApp(options = {}) {
       const { email, password, plan } = req.body || {};
       const { user, sessionToken, csrfToken } = await registerUser(repo, { email, password, plan });
       setSessionCookie(res, sessionToken);
+      setCsrfCookie(res, csrfToken);
       res.status(201).json({ user, csrfToken });
     } catch (err) {
       res.status(err.status || 500).json({ error: err.message });
@@ -222,6 +238,7 @@ export function createApp(options = {}) {
       const { email, password } = req.body || {};
       const { user, sessionToken, csrfToken } = await loginUser(repo, { email, password });
       setSessionCookie(res, sessionToken);
+      setCsrfCookie(res, csrfToken);
       res.json({ user, csrfToken });
     } catch (err) {
       res.status(err.status || 401).json({ error: err.message });
@@ -229,11 +246,16 @@ export function createApp(options = {}) {
   });
 
   app.post('/api/auth/logout', (req, res) => {
-    const rawToken = req.cookies ? req.cookies[SESSION_COOKIE_NAME] : null;
+    let rawToken = req.cookies ? req.cookies[SESSION_COOKIE_NAME] : null;
+    if (!rawToken && req.headers && req.headers.cookie) {
+      const match = req.headers.cookie.match(new RegExp('(?:^|;\\s*)' + SESSION_COOKIE_NAME + '=([^;]*)'));
+      if (match && match[1]) rawToken = decodeURIComponent(match[1]).trim();
+    }
     if (rawToken) {
       repo.deleteSession(rawToken);
     }
     clearSessionCookie(res);
+    clearCsrfCookie(res);
     res.json({ success: true, message: 'Logged out successfully' });
   });
 
@@ -242,14 +264,20 @@ export function createApp(options = {}) {
     if (!rawToken && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
       rawToken = req.headers.authorization.slice(7).trim();
     }
+    if (!rawToken && req.headers && req.headers.cookie) {
+      const match = req.headers.cookie.match(new RegExp('(?:^|;\\s*)' + SESSION_COOKIE_NAME + '=([^;]*)'));
+      if (match && match[1]) rawToken = decodeURIComponent(match[1]).trim();
+    }
     if (!rawToken) {
       return res.status(401).json({ error: 'Not authenticated' });
     }
     const session = repo.getSession(rawToken);
     if (!session) {
       clearSessionCookie(res);
+      clearCsrfCookie(res);
       return res.status(401).json({ error: 'Session expired or invalid' });
     }
+    setCsrfCookie(res, session.csrf_token);
     res.json({
       user: {
         id: session.user_id,
@@ -266,13 +294,20 @@ export function createApp(options = {}) {
     if (!rawToken && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
       rawToken = req.headers.authorization.slice(7).trim();
     }
+    if (!rawToken && req.headers && req.headers.cookie) {
+      const match = req.headers.cookie.match(new RegExp('(?:^|;\\s*)' + SESSION_COOKIE_NAME + '=([^;]*)'));
+      if (match && match[1]) rawToken = decodeURIComponent(match[1]).trim();
+    }
     if (!rawToken) {
       return res.json({ csrfToken: null });
     }
     const session = repo.getSession(rawToken);
     if (!session) {
+      clearSessionCookie(res);
+      clearCsrfCookie(res);
       return res.json({ csrfToken: null });
     }
+    setCsrfCookie(res, session.csrf_token);
     res.json({ csrfToken: session.csrf_token });
   });
 
@@ -990,8 +1025,8 @@ export function createApp(options = {}) {
     }
   });
 
-  app.get('/api/video-info', requireAuth, async (req, res) => {
-    const url = req.query.url;
+  const handleVideoInfo = async (req, res) => {
+    const url = req.query.url || (req.body && req.body.url);
     if (!url) return res.status(400).json({ error: 'url parameter is required' });
     try {
       const media = validateMediaUrl(url);
@@ -1002,7 +1037,9 @@ export function createApp(options = {}) {
       const isClientErr = e.message.includes('protocol') || e.message.includes('authorized') || e.message.includes('Malformed') || e.message.includes('Playlists') || e.message.includes('dash') || e.message.includes('video ID') || e.message.includes('userinfo') || e.message.includes('Custom ports') || e.message.includes('Instagram');
       res.status(isClientErr ? 400 : 500).json({ error: e.message });
     }
-  });
+  };
+  app.get('/api/video-info', requireAuth, handleVideoInfo);
+  app.post('/api/video-info', requireAuth, handleVideoInfo);
 
   app.get('/api/ai/models', requireAuth, (req, res) => {
     res.json({ models: ['llama-3.3-70b-versatile', 'llama3.2:3b'] });
