@@ -26,10 +26,8 @@ export async function processJob({ jobId, userId, sourceType, sourceRef, params 
 
   const broadcast = (data) => {
     emitJobEvent({ ...data, jobId, userId });
-    if (data.type === 'log') {
-      onLog?.(data.msg, data.level || 'info');
-    } else if (data.type === 'progress') {
-      onProgress?.(data.progress, data.msg || '');
+    if (data.type === 'progress') {
+      repo.updateJob(jobId, { progress: data.progress });
     }
   };
 

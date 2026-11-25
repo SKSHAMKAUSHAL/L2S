@@ -15,7 +15,7 @@ const MAX_BUFFER_BYTES = 10 * 1024 * 1024; // 10MB output buffer cap
 /**
  * Execute command asynchronously with process tracking, timeout, and buffer capping
  */
-export function runCommandAsync(command, args, timeoutMs = 600000, jobId = null) {
+export function runCommandAsync(command, args, timeoutMs = 600000, jobId = null, onProgress = null) {
   return new Promise((resolve, reject) => {
     // shell is strictly false to prevent shell injection
     const child = spawnTracked(command, args, { shell: false }, jobId);
@@ -36,15 +36,28 @@ export function runCommandAsync(command, args, timeoutMs = 600000, jobId = null)
       reject(new Error(`${command} timed out after ${timeoutMs / 1000}s`));
     }, timeoutMs);
 
+    let lastProgressTime = 0;
     child.stdout.on("data", (data) => {
-      if (stdout.length + data.length <= MAX_BUFFER_BYTES) {
-        stdout += data.toString();
+      const text = data.toString();
+      if (stdout.length + text.length <= MAX_BUFFER_BYTES) {
+        stdout += text;
+      }
+      if (onProgress) {
+        const match = text.match(/\[download\]\s+(\d+(?:\.\d+)?%)\s+of\s+([^\s]+)\s+at\s+([^\s]+)\s+ETA\s+([^\s\r\n]+)/);
+        if (match) {
+          const now = Date.now();
+          if (now - lastProgressTime >= 1200) {
+            lastProgressTime = now;
+            onProgress(`📥 Download: ${match[1]} of ${match[2]} at ${match[3]} (ETA ${match[4]})`);
+          }
+        }
       }
     });
 
     child.stderr.on("data", (data) => {
-      if (stderr.length + data.length <= MAX_BUFFER_BYTES) {
-        stderr += data.toString();
+      const text = data.toString();
+      if (stderr.length + text.length <= MAX_BUFFER_BYTES) {
+        stderr += text;
       }
     });
 
@@ -114,15 +127,15 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high', job
 
   const { canonicalUrl } = validateYouTubeUrl(url);
 
-  // Quality format profiles
+  // Quality format profiles (1080p max for blazing fast download while preserving full shorts quality)
   const qualityFormats = {
-    best: "bestvideo+bestaudio/best",
+    best: "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
     '4k': "bestvideo[height<=2160]+bestaudio/best[height<=2160]/best",
     '1440p': "bestvideo[height<=1440]+bestaudio/best[height<=1440]/best",
     '1080p': "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
     '720p': "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-    high: "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best",
-    medium: "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    high: "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    medium: "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
     fast: "bestvideo[height<=720]+bestaudio/best[height<=720]/best[ext=mp4]/best",
   };
 
@@ -133,7 +146,10 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high', job
     "-f", selectedFormat,
     "--merge-output-format", "mp4",
     "--no-playlist",
-    "--max-filesize", MAX_DOWNLOAD_BYTES,
+    "--concurrent-fragments", "4",
+    "--buffer-size", "1024k",
+    "--no-update",
+    "--max-filesize", `${MAX_DOWNLOAD_BYTES}`,
     "--match-filter", `duration<=${MAX_SECONDS}`,
     "--socket-timeout", "30",
     "--retries", "3",
@@ -154,7 +170,10 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high', job
         "-f", selectedFormat,
         "--merge-output-format", "mp4",
         "--no-playlist",
-        "--max-filesize", MAX_DOWNLOAD_BYTES,
+        "--concurrent-fragments", "4",
+        "--buffer-size", "1024k",
+        "--no-update",
+        "--max-filesize", `${MAX_DOWNLOAD_BYTES}`,
         "--match-filter", `duration<=${MAX_SECONDS}`,
         "--socket-timeout", "30",
         "--retries", "3",
@@ -173,7 +192,10 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high', job
         "-f", selectedFormat,
         "--merge-output-format", "mp4",
         "--no-playlist",
-        "--max-filesize", MAX_DOWNLOAD_BYTES,
+        "--concurrent-fragments", "4",
+        "--buffer-size", "1024k",
+        "--no-update",
+        "--max-filesize", `${MAX_DOWNLOAD_BYTES}`,
         "--match-filter", `duration<=${MAX_SECONDS}`,
         "--socket-timeout", "30",
         "--retries", "3",
@@ -194,10 +216,20 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high', job
     if (onLog) onLog(`Trying: ${strategy.name}...`);
 
     try {
-      const result = await runCommandAsync("yt-dlp", strategy.args, 600000, jobId);
+      const result = await runCommandAsync("yt-dlp", strategy.args, 600000, jobId, onLog);
+
+      const combinedOutput = `${result.stdout || ''}\n${result.stderr || ''}`;
+
+      // Catch filter skips immediately so we don't stall looping strategies
+      if (combinedOutput.includes('does not pass filter (duration<=')) {
+        throw new Error(`Video duration exceeds the maximum allowed limit of ${Math.round(Number(MAX_SECONDS) / 60)} minutes. Please update MAX_SECONDS in .env or choose a shorter video.`);
+      }
+      if (combinedOutput.includes('File is larger than max-filesize')) {
+        throw new Error(`Video file size exceeds the allowed MAX_DOWNLOAD_BYTES (${MAX_DOWNLOAD_BYTES}).`);
+      }
 
       if (result.status !== 0) {
-        lastError = (result.stderr || "").trim();
+        lastError = (result.stderr || result.stdout || "").trim();
         if (onLog) onLog(`Strategy "${strategy.name}" failed: ${lastError.split("\n")[0]}`);
         continue;
       }
