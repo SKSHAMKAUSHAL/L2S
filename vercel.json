@@ -9,14 +9,13 @@
           "type": "service",
           "service": "scripts",
           "format": "url",
-          "env": "SCRIPTS_SERVICE_URL"
+          "env": "SCRIPTS_URL"
         }
       ]
     },
     "scripts": {
       "root": "scripts",
-      "runtime": "python",
-      "entrypoint": "index.py"
+      "runtime": "python"
     }
   },
   "rewrites": [
