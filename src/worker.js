@@ -3,6 +3,8 @@
  * Standalone background worker process for executing video processing jobs via BullMQ / Redis.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { getDb, createDbRepository } from './db/index.js';
 import { runPipeline } from './pipeline.js';
 import { emitJobEvent } from './queue/index.js';
@@ -10,24 +12,49 @@ import { emitJobEvent } from './queue/index.js';
 const REDIS_URL = process.env.REDIS_URL;
 const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY || 1));
 
-export async function processJob({ jobId, userId, sourceType, sourceRef, params, repo, onProgress, onLog }) {
+export async function processJob({ jobId, userId, sourceType, sourceRef, params = {}, repo, onProgress, onLog }) {
   repo.updateJob(jobId, { status: 'processing', started_at: new Date().toISOString() });
 
-  const storageDir = `storage/${userId}/${jobId}`;
+  const rootDir = process.cwd();
+  const storageDir = path.join(rootDir, 'storage', userId, jobId);
+
+  // Ensure storage directories exist
+  try {
+    fs.mkdirSync(path.join(storageDir, 'clips'), { recursive: true });
+    fs.mkdirSync(path.join(rootDir, 'temp'), { recursive: true });
+  } catch (e) {}
+
+  const broadcast = (data) => {
+    emitJobEvent({ ...data, jobId, userId });
+    if (data.type === 'log') {
+      onLog?.(data.msg, data.level || 'info');
+    } else if (data.type === 'progress') {
+      onProgress?.(data.progress, data.msg || '');
+    }
+  };
+
   const customOptions = {
     ...params,
     jobId,
     userId,
     customOutputDir: storageDir,
+    broadcast,
+    rootDir,
     onProgress: (pct, msg) => {
-      onProgress(pct, msg);
+      onProgress?.(pct, msg);
     },
     onLog: (msg, level = 'info') => {
-      onLog(msg, level);
+      onLog?.(msg, level);
     }
   };
 
-  const results = await runPipeline(sourceRef, customOptions);
+  const results = await runPipeline(
+    sourceRef,
+    params.genre || 'auto',
+    broadcast,
+    rootDir,
+    customOptions
+  );
 
   // Save generated clips to DB
   if (results && results.clips) {

@@ -390,6 +390,37 @@ function handleMessage(data) {
       appendLog(data.msg, data.level || 'info');
       break;
 
+    case 'started':
+      appendLog('🚀 Video processing pipeline started...', 'info');
+      break;
+
+    case 'progress':
+      if (data.msg) appendLog(data.msg, 'info');
+      break;
+
+    case 'completed':
+      stopTimer();
+      pipelineRunning = false;
+      setProcessingState(false);
+      appendLog('✅ Video processing completed successfully!', 'success');
+      break;
+
+    case 'failed':
+      stopTimer();
+      pipelineRunning = false;
+      setProcessingState(false);
+      appendLog(`❌ Processing failed: ${data.error || data.msg || 'Unknown error'}`, 'error');
+      showToast(`Processing failed: ${data.error || data.msg || 'Unknown error'}`, 'error');
+      break;
+
+    case 'cancelled':
+      stopTimer();
+      pipelineRunning = false;
+      setProcessingState(false);
+      appendLog('🛑 Pipeline cancelled.', 'warning');
+      showToast('Pipeline cancelled', 'info');
+      break;
+
     case 'step':
       updateStep(data.step, data.status);
       // When download completes, switch to local video
@@ -922,6 +953,13 @@ generateBtnTarget?.addEventListener('click', async (e) => {
       }
       throw new Error(data.message || data.error || 'Failed to start pipeline');
     }
+
+    if (data && data.jobId) {
+      currentJobId = data.jobId;
+    }
+    appendLog('📋 Video queued for processing. Starting pipeline...', 'info');
+    els.pipelineSection?.classList.add('visible');
+    els.pipelineSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
     appendLog(`Failed to start: ${err.message}`, 'error');
     pipelineRunning = false;
@@ -955,10 +993,10 @@ function closeStopModal() {
 async function executeStopPipeline() {
   closeStopModal();
   try {
-    const res = await fetch('/api/pipeline/stop', {
+    const res = await fetch('/api/process/stop', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: currentSessionId }),
+      body: JSON.stringify({ jobId: currentJobId, sessionId: currentSessionId }),
     });
     
     if (!res.ok) throw new Error('Stop failed');

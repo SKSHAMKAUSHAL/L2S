@@ -1061,7 +1061,16 @@ export function createApp(options = {}) {
     res.json({ success: true, freedMB: '0.00' });
   });
 
-  app.post('/api/pipeline/stop', requireAuth, (req, res) => {
+  app.post('/api/pipeline/stop', requireAuth, async (req, res) => {
+    const { jobId } = req.body || {};
+    if (jobId) {
+      try {
+        const result = await cancelJob(repo, jobId, req.user.id);
+        return res.json(result);
+      } catch (err) {
+        return res.status(err.status || 500).json({ error: err.message });
+      }
+    }
     stopPipeline();
     res.json({ success: true, message: 'Pipeline stopped' });
   });
@@ -1119,7 +1128,9 @@ if (isDirectRun) {
 
     const origin = req.headers.origin;
     const allowedOrigin = process.env.APP_ORIGIN;
-    if (origin && allowedOrigin && allowedOrigin !== '*' && origin !== allowedOrigin) {
+    const isLocalhostDev = (origin && (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:'))) &&
+                           (process.env.NODE_ENV !== 'production' || !allowedOrigin);
+    if (origin && allowedOrigin && allowedOrigin !== '*' && origin !== allowedOrigin && !isLocalhostDev) {
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;

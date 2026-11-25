@@ -760,14 +760,43 @@ header {
 }
 
 /* ─── Pipeline Section ────────────────────── */
-.pipeline-section {
+.pipeline-section,
+.progress-section,
+#progress-section {
   display: none;
   margin-top: 8px;
   padding: 32px 0;
   animation: fadeIn 0.4s ease;
 }
 
-.pipeline-section.visible { display: block; }
+.pipeline-section.visible,
+.progress-section.visible,
+#progress-section.visible {
+  display: block !important;
+}
+
+#btn-stop-confirm,
+.btn-confirm-stop {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+  color: #ffffff !important;
+  border: none !important;
+  padding: 8px 20px !important;
+  border-radius: 8px !important;
+  font-weight: 700 !important;
+  cursor: pointer !important;
+  box-shadow: 0 2px 10px rgba(239, 68, 68, 0.4) !important;
+  transition: all var(--transition) !important;
+}
+
+#btn-stop-confirm:hover,
+.btn-confirm-stop:hover {
+  filter: brightness(1.15) !important;
+  box-shadow: 0 4px 16px rgba(239, 68, 68, 0.6) !important;
+  transform: translateY(-1px);
+}
 
 .pipeline-timer {
   font-family: var(--font-mono);

@@ -214,6 +214,17 @@ function deduplicateClips(clips) {
  * @param {Object} options - Advanced options { description, timestamps, clipMode }
  */
 export async function runPipeline(source, genre, broadcast, rootDir, options = {}) {
+  // Gracefully handle argument polymorphism (e.g. runPipeline(source, options))
+  if (typeof genre === 'object' && genre !== null && !options.genre) {
+    options = { ...genre, ...options };
+    genre = options.genre || 'auto';
+  }
+  if (!broadcast || typeof broadcast !== 'function') {
+    broadcast = (options && typeof options.broadcast === 'function') ? options.broadcast : () => {};
+  }
+  rootDir = rootDir || options.rootDir || process.cwd();
+  genre = typeof genre === 'string' ? genre : 'auto';
+
   const config = getConfig();
   const pipeline = { stopped: false, videoPath: null, selected: null, clipsWithMeta: null, transcript: null };
   currentPipeline = pipeline;
@@ -232,7 +243,7 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
   }
 
   const tempDir = path.join(rootDir, 'temp');
-  const outputBaseDir = path.join(rootDir, 'output');
+  const outputBaseDir = options.customOutputDir ? path.resolve(rootDir, options.customOutputDir) : path.join(rootDir, 'output');
 
   // Verify disk space before allocating temp files
   try {
@@ -574,6 +585,13 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
       videoPath: videoPath,
       language: transcript.language || 'unknown',
     });
+
+    return {
+      clips: clipsWithMeta,
+      videoPath,
+      transcript,
+      totalDuration: transcript.duration || 0,
+    };
 
   } catch (err) {
     if (err.message === 'PIPELINE_CANCELLED') {
