@@ -730,10 +730,10 @@
     <!-- ─── Clip Studio & Caption Customizer (Whiteboard Modal) ─── -->
     <div class="modal-overlay" id="editor-modal">
       <div class="modal-content studio-modal-content">
-        <div class="modal-header">
+        <div class="modal-header studio-modal-header">
           <div>
             <h3 class="modal-title">🎨 Clip Studio & Caption Customizer</h3>
-            <p style="font-size:0.76rem;color:var(--text-muted);margin:0">Live 9:16 preview, pixel-accurate ASS typography, karaoke animations, and mobile safe areas</p>
+            <p style="font-size:0.72rem;color:var(--text-muted);margin:0">Live 9:16 preview, ASS typography, word-by-word editor, and framing</p>
           </div>
           <button class="modal-close" id="editor-close">&times;</button>
         </div>
@@ -744,8 +744,8 @@
             <!-- View Mode Switch: Single vs Side-by-Side Comparison -->
             <div class="studio-view-toggle-wrap">
               <div class="view-mode-pill-toggle" id="editor-view-mode-toggle">
-                <button type="button" class="view-mode-btn active" data-mode="single">👁️ Single View</button>
-                <button type="button" class="view-mode-btn" data-mode="compare">🔀 Compare Styles (Side-by-Side)</button>
+                <button type="button" class="view-mode-btn active" data-mode="single">👁️ Single</button>
+                <button type="button" class="view-mode-btn" data-mode="compare">🔀 Compare</button>
               </div>
             </div>
 
@@ -763,7 +763,7 @@
                 <div class="stage-view-col" id="stage-view-a">
                   <div class="stage-view-badge" id="stage-badge-a">
                     <span class="badge-dot"></span>
-                    <span class="badge-text" id="stage-badge-a-text">Style A: Bold Highlight</span>
+                    <span class="badge-text" id="stage-badge-a-text">Style A: Hormozi Viral</span>
                   </div>
                   <div class="studio-canvas-container" id="editor-canvas-container">
                     <video id="editor-video" playsinline loop muted></video>
@@ -780,14 +780,14 @@
                     <span class="badge-dot" style="background:var(--accent-cyan)"></span>
                     <span>Style B:</span>
                     <select id="editor-compare-preset-select" class="compare-preset-dropdown">
-                      <option value="karaoke" selected>🎤 Karaoke Word</option>
-                      <option value="bold">🔥 Bold Highlight</option>
-                      <option value="pop">⚡ Animated Pop</option>
+                      <option value="karaoke" selected>🎤 Karaoke</option>
+                      <option value="hormozi">🔥 Hormozi</option>
+                      <option value="neon">⚡ Neon</option>
+                      <option value="minimal">✨ Minimal</option>
+                      <option value="box">📦 Box</option>
                       <option value="cinematic">🎬 Cinematic</option>
-                      <option value="minimal">✨ Clean Minimal</option>
-                      <option value="podcast">🎙️ Podcast Sub</option>
-                      <option value="educational">📚 Educational</option>
-                      <option value="gaming">🎮 Gaming Neon</option>
+                      <option value="pop">💥 Pop</option>
+                      <option value="underline">✍️ Underline</option>
                     </select>
                   </div>
                   <div class="studio-canvas-container" id="editor-canvas-container-b">
@@ -805,7 +805,7 @@
               <div class="studio-stage-footer">
                 <label class="toggle-pill-label">
                   <input type="checkbox" id="toggle-editor-safe-zone" checked />
-                  <span>📱 9:16 Safe Zones</span>
+                  <span>📱 Safe Zones</span>
                 </label>
                 <div class="editor-volume-bar">
                   <button type="button" class="volume-toggle" id="volume-toggle" title="Toggle Mute">
@@ -818,172 +818,166 @@
             </div>
           </div>
 
-          <!-- Right: Comprehensive Creative Controls -->
+          <!-- Right: Single-Page Compact 2-Column Creative Controls -->
           <div class="studio-controls-panel">
-            <!-- Section 1: Caption Presets & Typography -->
-            <div class="studio-control-card">
-              <div class="studio-card-header">
-                <div class="studio-header-title">🔤 Caption Studio</div>
-                <label class="toggle-switch-wrap">
-                  <span id="editor-val-captions" style="font-size:0.76rem;font-weight:600;margin-right:8px">ON</span>
-                  <label class="toggle-switch">
-                    <input type="checkbox" id="editor-captions-toggle" checked />
-                    <span class="toggle-slider"></span>
-                  </label>
-                </label>
-              </div>
+            <div class="studio-controls-grid">
+              <!-- Column 1: Caption Studio + Trim + Zoom -->
+              <div class="studio-controls-col">
+                <div class="studio-control-card">
+                  <div class="studio-card-header">
+                    <div class="studio-header-title">🔤 Caption Studio</div>
+                    <label class="toggle-switch-wrap">
+                      <span id="editor-val-captions" style="font-size:0.74rem;font-weight:600;margin-right:6px">ON</span>
+                      <label class="toggle-switch">
+                        <input type="checkbox" id="editor-captions-toggle" checked />
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </label>
+                  </div>
 
-              <!-- 8 Professional Presets Grid -->
-              <div class="editor-presets-grid" id="editor-presets-grid">
-                <button type="button" class="preset-chip active" data-preset="hormozi">🔥 Hormozi</button>
-                <button type="button" class="preset-chip" data-preset="neon">⚡ Neon</button>
-                <button type="button" class="preset-chip" data-preset="karaoke">🎤 Karaoke</button>
-                <button type="button" class="preset-chip" data-preset="minimal">✨ Minimal</button>
-                <button type="button" class="preset-chip" data-preset="box">📦 Box</button>
-                <button type="button" class="preset-chip" data-preset="cinematic">🎬 Cinematic</button>
-                <button type="button" class="preset-chip" data-preset="pop">💥 Pop</button>
-                <button type="button" class="preset-chip" data-preset="underline">✍️ Underline</button>
-              </div>
+                  <!-- 8 Professional Presets Grid (4x2 compact) -->
+                  <div class="editor-presets-grid" id="editor-presets-grid">
+                    <button type="button" class="preset-chip active" data-preset="hormozi">🔥 Hormozi</button>
+                    <button type="button" class="preset-chip" data-preset="neon">⚡ Neon</button>
+                    <button type="button" class="preset-chip" data-preset="karaoke">🎤 Karaoke</button>
+                    <button type="button" class="preset-chip" data-preset="minimal">✨ Minimal</button>
+                    <button type="button" class="preset-chip" data-preset="box">📦 Box</button>
+                    <button type="button" class="preset-chip" data-preset="cinematic">🎬 Cinematic</button>
+                    <button type="button" class="preset-chip" data-preset="pop">💥 Pop</button>
+                    <button type="button" class="preset-chip" data-preset="underline">✍️ Underline</button>
+                  </div>
 
-              <!-- Typography Customization -->
-              <div class="studio-subgrid" style="margin-top:12px">
-                <div class="form-group">
-                  <label for="editor-font-family">Font Family</label>
-                  <select id="editor-font-family" class="customizer-select">
-                    <option value="Outfit">Outfit (Bold Display)</option>
-                    <option value="Inter">Inter (Clean Sans)</option>
-                    <option value="Montserrat">Montserrat (Impactful)</option>
-                    <option value="Impact">Impact (Classic Viral)</option>
-                    <option value="Arial">Arial (System Standard)</option>
-                  </select>
+                  <!-- Typography Customization -->
+                  <div class="studio-subgrid" style="margin-top:8px">
+                    <div class="form-group">
+                      <label for="editor-font-family">Font Family</label>
+                      <select id="editor-font-family" class="customizer-select">
+                        <option value="Outfit">Outfit (Bold Display)</option>
+                        <option value="Inter">Inter (Clean Sans)</option>
+                        <option value="Montserrat">Montserrat (Impactful)</option>
+                        <option value="Impact">Impact (Classic Viral)</option>
+                        <option value="Arial">Arial (System Standard)</option>
+                      </select>
+                    </div>
+
+                    <div class="form-group">
+                      <label>Font Size (<span id="editor-font-size-val">52px</span>)</label>
+                      <input type="range" id="editor-font-size" min="30" max="80" value="52" step="2" />
+                    </div>
+                  </div>
+
+                  <!-- Colors -->
+                  <div class="studio-subgrid" style="margin-top:6px">
+                    <div class="form-group">
+                      <label for="editor-color-highlight">Active Word Color</label>
+                      <input type="color" id="editor-color-highlight" value="#fee440" class="color-picker-input" />
+                    </div>
+                    <div class="form-group">
+                      <label for="editor-color-text">Base Text Color</label>
+                      <input type="color" id="editor-color-text" value="#ffffff" class="color-picker-input" />
+                    </div>
+                  </div>
+
+                  <!-- Text Case & Vertical Position -->
+                  <div class="form-group" style="margin-top:6px">
+                    <label>Text Case</label>
+                    <div class="case-button-row" id="editor-case-btns">
+                      <button type="button" class="btn-case active" data-case="uppercase">UPPERCASE</button>
+                      <button type="button" class="btn-case" data-case="capitalize">Title Case</button>
+                      <button type="button" class="btn-case" data-case="normal">normal</button>
+                    </div>
+                  </div>
+
+                  <div class="form-group" style="margin-top:8px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+                      <label for="editor-margin-v" style="font-size:0.75rem">Vertical Position</label>
+                      <span id="editor-margin-v-val" style="font-size:0.75rem;font-weight:700;color:var(--accent-purple)">420px</span>
+                    </div>
+                    <input type="range" id="editor-margin-v" min="160" max="650" value="420" step="10" />
+                    <div id="editor-safe-zone-status" class="safe-zone-status safe" style="font-size:0.7rem;margin-top:3px;display:flex;align-items:center;gap:6px">
+                      <span>✅ Platform Safe Zone</span>
+                    </div>
+                  </div>
                 </div>
 
-                <div class="form-group">
-                  <label>Font Size (<span id="editor-font-size-val">52px</span>)</label>
-                  <input type="range" id="editor-font-size" min="30" max="80" value="52" step="2" />
+                <!-- Timing & Trimming -->
+                <div class="studio-control-card">
+                  <div class="studio-card-header">
+                    <div class="studio-header-title">✂️ Timing & Trimming</div>
+                    <span id="editor-val-length" style="font-size:0.78rem;font-weight:700;color:var(--accent-purple)">0.0s</span>
+                  </div>
+                  <div class="range-slider-wrap">
+                    <input type="range" id="editor-start" min="0" max="100" value="0" step="0.1">
+                    <input type="range" id="editor-end" min="0" max="100" value="100" step="0.1">
+                  </div>
+                </div>
+
+                <!-- Framing & Zoom Viewfinder -->
+                <div class="studio-control-card">
+                  <div class="studio-card-header">
+                    <div class="studio-header-title">🔍 Framing &amp; Zoom</div>
+                    <span id="editor-val-zoom" style="font-size:0.78rem;font-weight:700;color:var(--accent-cyan)">1.0x</span>
+                  </div>
+                  <input type="range" id="editor-zoom" min="0.1" max="3.0" value="1.0" step="0.05">
+                  <div class="zoom-preset-chips" style="display:flex;gap:5px;margin-top:6px">
+                    <button type="button" class="btn-zoom-chip" data-zoom="0.5">0.5x</button>
+                    <button type="button" class="btn-zoom-chip active" data-zoom="1.0">1.0x</button>
+                    <button type="button" class="btn-zoom-chip" data-zoom="1.5">1.5x</button>
+                    <button type="button" class="btn-zoom-chip" data-zoom="2.0">2.0x</button>
+                    <button type="button" class="btn-zoom-chip" data-zoom="3.0">3.0x</button>
+                  </div>
                 </div>
               </div>
 
-              <!-- Colors & Text Casing -->
-              <div class="studio-subgrid" style="margin-top:10px">
-                <div class="form-group">
-                  <label for="editor-color-highlight">Active Word Color</label>
-                  <input type="color" id="editor-color-highlight" value="#fee440" class="color-picker-input" />
+              <!-- Column 2: Color Tone + Word-by-Word Editor -->
+              <div class="studio-controls-col">
+                <div class="studio-control-card">
+                  <div class="studio-header-title" style="margin-bottom:6px">🎨 Color Tone</div>
+                  <div class="studio-subgrid">
+                    <div class="form-group">
+                      <label>Exposure: <span id="editor-val-exposure">0.0</span></label>
+                      <input type="range" id="editor-exposure" min="-1.0" max="1.0" value="0" step="0.05">
+                    </div>
+                    <div class="form-group">
+                      <label>Contrast: <span id="editor-val-contrast">1.0</span></label>
+                      <input type="range" id="editor-contrast" min="0.0" max="2.0" value="1.0" step="0.05">
+                    </div>
+                    <div class="form-group">
+                      <label>Saturation: <span id="editor-val-saturation">1.0</span></label>
+                      <input type="range" id="editor-saturation" min="0.0" max="3.0" value="1.0" step="0.1">
+                    </div>
+                    <div class="form-group">
+                      <label>Sharpen: <span id="editor-val-sharpen">0.0</span></label>
+                      <input type="range" id="editor-sharpen" min="0.0" max="1.0" value="0.0" step="0.1">
+                    </div>
+                  </div>
                 </div>
-                <div class="form-group">
-                  <label for="editor-color-text">Base Text Color</label>
-                  <input type="color" id="editor-color-text" value="#ffffff" class="color-picker-input" />
-                </div>
-              </div>
 
-              <div class="form-group" style="margin-top:10px">
-                <label>Text Case</label>
-                <div class="case-button-row" id="editor-case-btns">
-                  <button type="button" class="btn-case active" data-case="uppercase">UPPERCASE</button>
-                  <button type="button" class="btn-case" data-case="capitalize">Title Case</button>
-                  <button type="button" class="btn-case" data-case="normal">normal</button>
-                </div>
-              </div>
+                <!-- Word-by-Word Caption Editor -->
+                <div class="studio-control-card studio-words-card" id="editor-word-by-word-card">
+                  <div class="studio-card-header">
+                    <div class="studio-header-title">📝 Word-by-Word Editor</div>
+                    <span id="editor-words-count" style="font-size:0.72rem;color:var(--text-muted)">0 words</span>
+                  </div>
 
-              <!-- Platform Safe Margin Slider -->
-              <div class="form-group" style="margin-top:12px">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                  <label for="editor-margin-v" style="font-size:0.78rem">Vertical Position (Safe Zone)</label>
-                  <span id="editor-margin-v-val" style="font-size:0.78rem;font-weight:700;color:var(--accent-purple)">420px</span>
-                </div>
-                <input type="range" id="editor-margin-v" min="160" max="650" value="420" step="10" />
-                <div id="editor-safe-zone-status" class="safe-zone-status safe" style="font-size:0.72rem;margin-top:5px;display:flex;align-items:center;gap:6px">
-                  <span>✅ Platform Safe: Avoids TikTok & Reels bottom engagement UI</span>
-                </div>
-              </div>
+                  <!-- Find & Replace across all clips -->
+                  <div class="caption-find-replace-box" style="margin-top:4px;margin-bottom:8px;padding:6px 8px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08)">
+                    <div style="display:flex;gap:5px;margin-bottom:5px;">
+                      <input type="text" id="editor-find-input" placeholder="Find..." style="flex:1;min-width:0;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);color:#fff;border-radius:4px;padding:3px 6px;font-size:0.74rem;" />
+                      <input type="text" id="editor-replace-input" placeholder="Replace..." style="flex:1;min-width:0;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);color:#fff;border-radius:4px;padding:3px 6px;font-size:0.74rem;" />
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                      <label style="font-size:0.7rem;display:flex;align-items:center;gap:4px;color:var(--text-muted);cursor:pointer">
+                        <input type="checkbox" id="editor-replace-case-sensitive" /> Match case
+                      </label>
+                      <button type="button" class="btn-secondary btn-sm" id="btn-editor-replace-all" style="padding:2px 8px;font-size:0.7rem;">Replace All</button>
+                    </div>
+                  </div>
 
-              <!-- Subtitle Export Buttons -->
-              <div class="subtitle-export-row" style="margin-top:14px;display:flex;gap:10px;">
-                <button type="button" class="btn-secondary btn-sm" id="btn-editor-export-srt" title="Download SubRip .SRT file">📥 Export .SRT</button>
-                <button type="button" class="btn-secondary btn-sm" id="btn-editor-export-ass" title="Download Advanced SubStation Alpha .ASS file">📥 Export .ASS</button>
-              </div>
-            </div>
-
-            <!-- Section 1B: Word-by-Word Caption Editor (Step 4) -->
-            <div class="studio-control-card" id="editor-word-by-word-card">
-              <div class="studio-card-header">
-                <div class="studio-header-title">📝 Word-by-Word Caption Editor</div>
-                <span id="editor-words-count" style="font-size:0.75rem;color:var(--text-muted)">0 words</span>
-              </div>
-
-              <!-- Find & Replace across all clips -->
-              <div class="caption-find-replace-box" style="margin-top:8px;margin-bottom:12px;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08)">
-                <div style="font-size:0.75rem;font-weight:600;margin-bottom:6px;color:var(--accent-cyan);display:flex;align-items:center;gap:6px">
-                  <span>🔍 Find and Replace in All Clips</span>
-                </div>
-                <div style="display:flex;gap:6px;margin-bottom:6px;">
-                  <input type="text" id="editor-find-input" placeholder="Find text..." style="flex:1;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);color:#fff;border-radius:4px;padding:4px 8px;font-size:0.78rem;" />
-                  <input type="text" id="editor-replace-input" placeholder="Replace with..." style="flex:1;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);color:#fff;border-radius:4px;padding:4px 8px;font-size:0.78rem;" />
-                </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <label style="font-size:0.72rem;display:flex;align-items:center;gap:4px;color:var(--text-muted);cursor:pointer">
-                    <input type="checkbox" id="editor-replace-case-sensitive" /> Match case
-                  </label>
-                  <button type="button" class="btn-secondary btn-sm" id="btn-editor-replace-all" style="padding:3px 10px;font-size:0.74rem;">Replace in All Clips</button>
-                </div>
-              </div>
-
-              <!-- Words List container in time order -->
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                <span style="font-size:0.75rem;color:var(--text-secondary);font-weight:600">Caption Lines (click to seek):</span>
-              </div>
-              <div id="editor-caption-rows-list" class="editor-caption-rows-container" style="max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:5px;padding-right:4px;">
-                <!-- Populated dynamically -->
-              </div>
-            </div>
-
-            <!-- Section 2: Timing & Trimming -->
-            <div class="studio-control-card">
-              <div class="studio-card-header">
-                <div class="studio-header-title">✂️ Timing & Trimming</div>
-                <span id="editor-val-length" style="font-size:0.8rem;font-weight:700;color:var(--accent-purple)">0.0s</span>
-              </div>
-              <div class="range-slider-wrap">
-                <input type="range" id="editor-start" min="0" max="100" value="0" step="0.1">
-                <input type="range" id="editor-end" min="0" max="100" value="100" step="0.1">
-              </div>
-            </div>
-
-            <!-- Section 3: Framing & Zoom Viewfinder -->
-            <div class="studio-control-card">
-              <div class="studio-card-header">
-                <div class="studio-header-title">🔍 Framing &amp; Zoom Viewfinder</div>
-                <span id="editor-val-zoom" style="font-size:0.8rem;font-weight:700;color:var(--accent-cyan)">1.0x</span>
-              </div>
-              <input type="range" id="editor-zoom" min="0.1" max="3.0" value="1.0" step="0.05">
-              <div class="zoom-preset-chips" style="display:flex;gap:6px;margin-top:8px">
-                <button type="button" class="btn-zoom-chip" data-zoom="0.5">0.5x</button>
-                <button type="button" class="btn-zoom-chip active" data-zoom="1.0">1.0x</button>
-                <button type="button" class="btn-zoom-chip" data-zoom="1.5">1.5x</button>
-                <button type="button" class="btn-zoom-chip" data-zoom="2.0">2.0x</button>
-                <button type="button" class="btn-zoom-chip" data-zoom="3.0">3.0x</button>
-              </div>
-            </div>
-
-            <!-- Section 4: Color Grading & Filters -->
-            <div class="studio-control-card">
-              <div class="studio-header-title" style="margin-bottom:8px">🎨 Color Tone</div>
-              <div class="studio-subgrid">
-                <div class="form-group">
-                  <label>Exposure: <span id="editor-val-exposure">0.0</span></label>
-                  <input type="range" id="editor-exposure" min="-1.0" max="1.0" value="0" step="0.05">
-                </div>
-                <div class="form-group">
-                  <label>Contrast: <span id="editor-val-contrast">1.0</span></label>
-                  <input type="range" id="editor-contrast" min="0.0" max="2.0" value="1.0" step="0.05">
-                </div>
-                <div class="form-group">
-                  <label>Saturation: <span id="editor-val-saturation">1.0</span></label>
-                  <input type="range" id="editor-saturation" min="0.0" max="3.0" value="1.0" step="0.1">
-                </div>
-                <div class="form-group">
-                  <label>Sharpen: <span id="editor-val-sharpen">0.0</span></label>
-                  <input type="range" id="editor-sharpen" min="0.0" max="1.0" value="0.0" step="0.1">
+                  <!-- Words List container in time order -->
+                  <div id="editor-caption-rows-list" class="editor-caption-rows-container">
+                    <!-- Populated dynamically -->
+                  </div>
                 </div>
               </div>
             </div>

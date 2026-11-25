@@ -459,10 +459,23 @@ function handleMessage(data) {
         // Refresh the result card's social blocks if visible
         const card = els.resultsList?.querySelector(`[data-result-index="${ci}"]`);
         if (card) {
-          const descEl = card.querySelector('.social-block-content');
-          if (descEl) descEl.textContent = data.description || descEl.textContent;
+          const titleEl = card.querySelector('.result-title');
+          if (titleEl && data.title) titleEl.textContent = data.title;
+
+          const captionEl = card.querySelector('.social-block-caption');
+          if (captionEl && data.caption) captionEl.textContent = data.caption;
+          const captionCopyBtn = card.querySelector('.copy-caption-btn');
+          if (captionCopyBtn && data.caption) captionCopyBtn.setAttribute('data-copy', data.caption);
+
+          const descEl = card.querySelector('.social-block-description');
+          if (descEl && data.description) descEl.textContent = data.description;
+          const descCopyBtn = card.querySelector('.copy-description-btn');
+          if (descCopyBtn && data.description) descCopyBtn.setAttribute('data-copy', data.description);
+
           const tagEl = card.querySelector('.social-block-hashtags');
-          if (tagEl) tagEl.textContent = data.hashtags || tagEl.textContent;
+          if (tagEl && data.hashtags) tagEl.textContent = data.hashtags;
+          const tagCopyBtn = card.querySelector('.copy-hashtags-btn');
+          if (tagCopyBtn && data.hashtags) tagCopyBtn.setAttribute('data-copy', data.hashtags);
         }
       }
       break;
@@ -1303,23 +1316,23 @@ function createResultCard(clip, videoUrl, index, storageType = 'local') {
       <div class="social-block">
         <div class="social-block-label">
           <span>📝 Caption</span>
-          <button class="copy-btn" data-copy="${escapeAttr(clip.caption || '')}">Copy</button>
+          <button class="copy-btn copy-caption-btn" data-copy="${escapeAttr(clip.caption || '')}">Copy</button>
         </div>
-        <div class="social-block-content">${escapeHtml(clip.caption || 'No caption generated')}</div>
+        <div class="social-block-content social-block-caption">${escapeHtml(clip.caption || 'No caption generated')}</div>
       </div>
 
       <div class="social-block">
         <div class="social-block-label">
           <span>📄 Description</span>
-          <button class="copy-btn" data-copy="${escapeAttr(clip.description || '')}">Copy</button>
+          <button class="copy-btn copy-description-btn" data-copy="${escapeAttr(clip.description || '')}">Copy</button>
         </div>
-        <div class="social-block-content">${escapeHtml(clip.description || 'No description generated')}</div>
+        <div class="social-block-content social-block-description">${escapeHtml(clip.description || 'No description generated')}</div>
       </div>
 
       <div class="social-block">
         <div class="social-block-label">
           <span># Hashtags</span>
-          <button class="copy-btn" data-copy="${escapeAttr(clip.hashtags || '')}">Copy</button>
+          <button class="copy-btn copy-hashtags-btn" data-copy="${escapeAttr(clip.hashtags || '')}">Copy</button>
         </div>
         <div class="social-block-hashtags">${escapeHtml(clip.hashtags || 'No hashtags generated')}</div>
       </div>
@@ -1840,7 +1853,7 @@ function openEditor(index) {
   
   // Custom caption settings for this clip
   const custom = currentClipData.custom = currentClipData.custom || {};
-  custom.captionPreset = custom.captionPreset || 'bold';
+  custom.captionPreset = custom.captionPreset || 'hormozi';
   custom.captionsEnabled = custom.captionsEnabled ?? true;
   custom.fontFamily = custom.fontFamily || 'Outfit';
   custom.fontSize = custom.fontSize || 52;
@@ -1857,7 +1870,7 @@ function openEditor(index) {
   // Sync Preset Badges
   updatePresetBadgeA(custom.captionPreset);
   if (els.editorComparePresetSelect) {
-    els.editorComparePresetSelect.value = custom.captionPreset === 'bold' ? 'karaoke' : 'bold';
+    els.editorComparePresetSelect.value = custom.captionPreset === 'karaoke' ? 'hormozi' : 'karaoke';
   }
 
   els.editorStart.min = 0;
@@ -1921,6 +1934,7 @@ function openEditor(index) {
   }, { once: true });
 
   els.editorModal.classList.add("visible");
+  renderEditorCaption(start);
   loadCaptionsForEditor(index);
 }
 
@@ -2054,11 +2068,23 @@ async function saveEditorCaptions() {
   const clipNum = editingClipIndex + 1;
   const custom = currentClipData?.custom || {};
   const preset = custom.captionPreset || 'hormozi';
+  const fontSize = Number(document.getElementById('editor-font-size')?.value) || custom.fontSize || 52;
+  const fontFamily = document.getElementById('editor-font-family')?.value || custom.fontFamily || 'Outfit';
+  const marginV = Number(els.editorMarginV?.value) || custom.marginV || 420;
+  const textColor = document.getElementById('editor-color-text')?.value || custom.textColor || '#ffffff';
+  const highlightColor = document.getElementById('editor-color-highlight')?.value || custom.highlightColor || '#fee440';
+  const textCase = custom.textCase || 'uppercase';
   const overrides = {
-    fontSize: Number(document.getElementById('editor-font-size')?.value) || 52,
-    position: Number(els.editorMarginV?.value) || 420,
-    colour: document.getElementById('editor-color-text')?.value || '#ffffff',
-    uppercase: custom.textCase === 'uppercase',
+    fontSize,
+    fontFamily,
+    marginV,
+    position: marginV,
+    textColor,
+    colour: textColor,
+    highlightColor,
+    textCase,
+    uppercase: textCase === 'uppercase',
+    captionsEnabled: els.editorCaptionsToggle ? els.editorCaptionsToggle.checked : true,
   };
 
   try {
@@ -2079,16 +2105,16 @@ async function saveEditorCaptions() {
 // ─── Preset Display Helpers & Shared Style Models ──
 function getPresetDisplayName(presetId) {
   const map = {
-    minimal: 'Clean Minimal',
-    cinematic: 'Cinematic',
-    bold: 'Bold Highlight',
+    hormozi: 'Hormozi Viral',
+    neon: 'Neon Cyber',
     karaoke: 'Karaoke Word',
+    minimal: 'Clean Minimal',
+    box: 'Solid Box',
+    cinematic: 'Cinematic',
     pop: 'Animated Pop',
-    podcast: 'Podcast Sub',
-    educational: 'Educational',
-    gaming: 'Gaming Neon',
+    underline: 'Underline',
   };
-  return map[presetId] || 'Bold Highlight';
+  return map[presetId] || 'Hormozi Viral';
 }
 
 function updatePresetBadgeA(presetId) {
@@ -2101,10 +2127,10 @@ function updateSafeZoneStatus(marginV) {
   if (!els.editorSafeZoneStatus) return;
   if (marginV >= 350) {
     els.editorSafeZoneStatus.className = 'safe-zone-status safe';
-    els.editorSafeZoneStatus.innerHTML = '<span>✅ Platform Safe: Avoids TikTok & Reels bottom engagement UI</span>';
+    els.editorSafeZoneStatus.innerHTML = '<span>✅ Platform Safe Zone</span>';
   } else {
-    els.editorSafeZoneStatus.className = 'safe-zone-status warn';
-    els.editorSafeZoneStatus.innerHTML = '<span>⚠️ Caution: May be obscured by bottom titles and action buttons on mobile</span>';
+    els.editorSafeZoneStatus.className = 'safe-zone-status safe';
+    els.editorSafeZoneStatus.innerHTML = `<span>📍 Lower Position (${marginV}px)</span>`;
   }
 }
 
@@ -2121,25 +2147,29 @@ function positionCaptionOverlay(overlay, marginV, presetId) {
 }
 
 function getCaptionWordHtml(windowWords, currentTime, presetId, custom, textCase) {
+  const effectiveCase = textCase || custom.textCase || 'uppercase';
   return windowWords.map(w => {
     const isActive = currentTime >= w.start && currentTime <= w.end;
-    let wordText = w.word;
-    if (textCase === 'uppercase') wordText = wordText.toUpperCase();
-    else if (textCase === 'capitalize') wordText = wordText.charAt(0).toUpperCase() + wordText.slice(1);
+    let wordText = w.word || '';
+    if (effectiveCase === 'uppercase') {
+      wordText = wordText.toUpperCase();
+    } else if (effectiveCase === 'capitalize') {
+      wordText = wordText.charAt(0).toUpperCase() + wordText.slice(1).toLowerCase();
+    }
 
-    const baseFont = custom.fontFamily || (presetId === 'cinematic' ? 'Georgia' : (presetId === 'gaming' ? 'Impact' : 'Outfit'));
+    const baseFont = custom.fontFamily || 'Outfit';
     const fontSizePx = Math.round((custom.fontSize || 52) * 0.38);
     const textColor = custom.textColor || '#ffffff';
-    const highlightColor = custom.highlightColor || (presetId === 'karaoke' ? '#00FF66' : (presetId === 'cinematic' ? '#F0F0F0' : '#fee440'));
+    const highlightColor = custom.highlightColor || '#fee440';
 
-    let style = `font-family: '${baseFont}', sans-serif; font-size: ${fontSizePx}px;`;
+    let style = `font-family: '${baseFont}', sans-serif; font-size: ${fontSizePx}px; text-transform: none;`;
 
     switch (presetId) {
       case 'minimal':
-        style += `font-weight: 700; color: ${textColor}; background: rgba(0,0,0,0.65); padding: 4px 10px; border-radius: 6px;`;
+        style += `font-weight: 700; color: ${isActive ? highlightColor : textColor}; background: rgba(0,0,0,0.65); padding: 3px 8px; border-radius: 6px;`;
         break;
       case 'cinematic':
-        style += `font-family: 'Georgia', serif; font-style: italic; font-weight: 400; letter-spacing: 0.08em; text-shadow: 0 4px 10px rgba(0,0,0,0.9); color: ${isActive ? highlightColor : '#D0D0D0'};`;
+        style += `font-style: italic; font-weight: 500; letter-spacing: 0.06em; text-shadow: 0 3px 10px rgba(0,0,0,0.95); color: ${isActive ? highlightColor : textColor};`;
         break;
       case 'karaoke':
         style += `font-weight: 900;`;
@@ -2149,35 +2179,39 @@ function getCaptionWordHtml(windowWords, currentTime, presetId, custom, textCase
           style += `color: ${textColor}; text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, 0 2px 4px rgba(0,0,0,0.8);`;
         }
         break;
-      case 'pop':
-        style += `font-weight: 900; text-transform: uppercase;`;
+      case 'neon':
+        style += `font-weight: 900;`;
         if (isActive) {
-          style += `color: ${highlightColor}; transform: scale(1.28); display: inline-block; text-shadow: -3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000, 3px 3px 0 #000, 0 6px 14px rgba(0,0,0,0.95);`;
+          style += `color: ${highlightColor}; text-shadow: 0 0 14px ${highlightColor}, -2px -2px 0 #1a002b, 2px 2px 0 #1a002b; transform: scale(1.14); display: inline-block;`;
+        } else {
+          style += `color: ${textColor}; text-shadow: 0 0 6px rgba(0,255,255,0.45), -2px -2px 0 #1a002b, 2px 2px 0 #1a002b;`;
+        }
+        break;
+      case 'box':
+        style += `font-weight: 800; padding: 2px 7px; border-radius: 5px; display: inline-block;`;
+        if (isActive) {
+          style += `background: ${highlightColor}; color: #000000; transform: scale(1.08);`;
+        } else {
+          style += `background: rgba(0,0,0,0.75); color: ${textColor};`;
+        }
+        break;
+      case 'underline':
+        style += `font-weight: 800;`;
+        if (isActive) {
+          style += `color: ${highlightColor}; border-bottom: 3px solid ${highlightColor}; padding-bottom: 1px; text-shadow: -2px -2px 0 #000, 2px 2px 0 #000; display: inline-block;`;
+        } else {
+          style += `color: ${textColor}; text-shadow: -2px -2px 0 #000, 2px 2px 0 #000;`;
+        }
+        break;
+      case 'pop':
+        style += `font-weight: 900;`;
+        if (isActive) {
+          style += `color: ${highlightColor}; transform: scale(1.24); display: inline-block; text-shadow: -3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000, 3px 3px 0 #000, 0 6px 14px rgba(0,0,0,0.95);`;
         } else {
           style += `color: ${textColor}; text-shadow: -2px -2px 0 #000, 2px -2px 0 #000;`;
         }
         break;
-      case 'podcast':
-        style += `font-weight: 700; background: rgba(0,0,0,0.45); padding: 2px 8px; border-radius: 4px;`;
-        style += isActive ? `color: ${highlightColor}; text-shadow: 0 2px 6px rgba(0,0,0,0.8);` : `color: ${textColor};`;
-        break;
-      case 'educational':
-        style += `font-family: 'Trebuchet MS', 'Segoe UI', sans-serif; font-weight: 700;`;
-        if (isActive) {
-          style += `color: #38bdf8; background: rgba(15,23,42,0.8); padding: 2px 6px; border-radius: 6px; text-shadow: 0 0 8px rgba(56,189,248,0.5);`;
-        } else {
-          style += `color: ${textColor}; text-shadow: -2px -2px 0 #0f172a, 2px 2px 0 #0f172a;`;
-        }
-        break;
-      case 'gaming':
-        style += `font-family: Impact, sans-serif; font-style: italic; font-weight: 900; text-transform: uppercase;`;
-        if (isActive) {
-          style += `color: ${highlightColor}; text-shadow: -3px -3px 0 #000, 3px -3px 0 #000, 0 0 14px #ff4500; transform: scale(1.15); display: inline-block;`;
-        } else {
-          style += `color: #ff4500; text-shadow: -2px -2px 0 #000, 2px -2px 0 #000;`;
-        }
-        break;
-      case 'bold':
+      case 'hormozi':
       default:
         style += `font-weight: 900;`;
         if (isActive) {
@@ -2204,7 +2238,7 @@ function renderEditorCaption(currentTime) {
   }
   overlay.style.display = 'flex';
 
-  const presetId = custom.captionPreset || 'bold';
+  const presetId = custom.captionPreset || 'hormozi';
   const marginV = custom.marginV ?? 420;
   positionCaptionOverlay(overlay, marginV, presetId);
 
@@ -2221,11 +2255,14 @@ function renderEditorCaption(currentTime) {
   const safeIdx = activeWordIdx >= 0 ? activeWordIdx : words.findIndex(w => w.start > currentTime);
   const targetIdx = safeIdx === -1 ? words.length - 1 : safeIdx;
 
-  const chunkSize = presetId === 'pop' ? 2 : (presetId === 'gaming' ? 3 : 4);
+  const chunkSize = presetId === 'pop' ? 2 : 3;
   const startWindow = Math.max(0, Math.floor(targetIdx / chunkSize) * chunkSize);
   const windowWords = words.slice(startWindow, startWindow + chunkSize);
 
   box.innerHTML = getCaptionWordHtml(windowWords, currentTime, presetId, custom, custom.textCase || 'uppercase');
+  if (editorViewMode === 'compare') {
+    renderCompareCaptionB(currentTime);
+  }
 }
 
 // ─── Real-Time Caption Renderer in Comparison View (View B) ──
@@ -2258,7 +2295,7 @@ function renderCompareCaptionB(currentTime) {
   const safeIdx = activeWordIdx >= 0 ? activeWordIdx : words.findIndex(w => w.start > currentTime);
   const targetIdx = safeIdx === -1 ? words.length - 1 : safeIdx;
 
-  const chunkSize = presetIdB === 'pop' ? 2 : (presetIdB === 'gaming' ? 3 : 4);
+  const chunkSize = presetIdB === 'pop' ? 2 : 3;
   const startWindow = Math.max(0, Math.floor(targetIdx / chunkSize) * chunkSize);
   const windowWords = words.slice(startWindow, startWindow + chunkSize);
 
@@ -2342,7 +2379,7 @@ els.btnUseStyleB?.addEventListener('click', () => {
 els.editorApplyAllBtn?.addEventListener('click', () => {
   if (!currentClipData || !allClips || allClips.length === 0) return;
   const custom = currentClipData.custom || {};
-  const presetId = custom.captionPreset || 'bold';
+  const presetId = custom.captionPreset || 'hormozi';
 
   allClips.forEach(clip => {
     clip.custom = clip.custom || {};

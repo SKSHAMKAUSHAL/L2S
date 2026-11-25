@@ -59,6 +59,14 @@ export function hasWordTimestamps(words) {
   return (validWordCount / words.length) >= 0.5;
 }
 
+function applyTextCase(word, textCase, isUppercase) {
+  if (!word) return '';
+  if (textCase === 'uppercase') return word.toUpperCase();
+  if (textCase === 'capitalize') return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+  if (textCase === 'normal') return word;
+  return isUppercase ? word.toUpperCase() : word;
+}
+
 /**
  * Generate full ASS script string from words array and style options
  */
@@ -67,14 +75,16 @@ export function generateASSScript(words, styleId = 'hormozi', options = {}) {
 
   const offset = Number(options.offset) || 0;
   const fontSize = Number(options.fontSize) || preset.fontSize;
-  const marginV = Number(options.marginV ?? options.bottomMargin) || preset.marginV;
+  const marginV = Number(options.marginV ?? options.bottomMargin ?? options.position) || preset.marginV;
   const latinFont = options.fontFamily || options.fontName || preset.fonts?.latin || preset.fontName || SCRIPT_FONTS.latin_bold;
   const devanagariFont = preset.fonts?.devanagari || SCRIPT_FONTS.devanagari;
   const alignment = Number(options.alignment) || preset.alignment;
 
   const isUppercase = options.uppercase !== undefined ? options.uppercase : (preset.uppercase || false);
+  const textCase = options.textCase || (isUppercase ? 'uppercase' : 'normal');
 
-  const primaryColor = options.textColor ? hexToAssColor(options.textColor) : preset.primaryColor;
+  const rawTextColor = options.textColor || options.colour;
+  const primaryColor = rawTextColor ? hexToAssColor(rawTextColor) : preset.primaryColor;
   const highlightColor = options.highlightColor ? hexToAssColor(options.highlightColor) : preset.highlightColor;
   const secondaryColor = preset.secondaryColor || '&H000000FF';
 
@@ -119,7 +129,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     // Highlight Style: Karaoke (\k tags)
     if (preset.highlightStyle === 'karaoke') {
       const karaokeTokens = caption.words.map(w => {
-        const rawText = isUppercase ? w.word.toUpperCase() : w.word;
+        const rawText = applyTextCase(w.word, textCase, isUppercase);
         const safeWord = escapeASSText(rawText);
         const durationCentis = Math.max(1, Math.round(((w.end - w.start) * 100)));
         return `{\\k${durationCentis}}${safeWord}`;
@@ -133,7 +143,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     // Highlight Style: Minimal / None (Single event per caption)
     if (preset.highlightStyle === 'none') {
-      const rawText = isUppercase ? caption.text.toUpperCase() : caption.text;
+      const rawText = applyTextCase(caption.text, textCase, isUppercase);
       const safeText = escapeASSText(rawText);
       const start = formatASSTime(caption.start);
       const end = formatASSTime(caption.end);
@@ -154,7 +164,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       let textTokens = [];
       for (let j = 0; j < caption.words.length; j++) {
         const w = caption.words[j];
-        const rawText = isUppercase ? w.word.toUpperCase() : w.word;
+        const rawText = applyTextCase(w.word, textCase, isUppercase);
         const safeWord = escapeASSText(rawText);
 
         if (j === i) {
