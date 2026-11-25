@@ -37,8 +37,8 @@ export function validateTranscript(t) {
     throw new Error('validateTranscript: transcript.words must be an array');
   }
 
-  // Validate words
-  let lastWordEnd = -1;
+  // Validate words (check non-decreasing start times while preserving negative/inverted guards)
+  let lastWordStart = -1;
   for (let i = 0; i < t.words.length; i++) {
     const w = t.words[i];
     if (typeof w.word !== 'string') {
@@ -53,11 +53,10 @@ export function validateTranscript(t) {
     if (w.start > w.end) {
       throw new Error(`validateTranscript: word "${w.word}" has start > end (${w.start} > ${w.end})`);
     }
-    // Allow slight tolerance (up to 0.05s) for audio overlap/coarticulation, but not inverted sequence
-    if (w.start < lastWordEnd - 0.5) {
+    if (w.start < lastWordStart - 0.5) {
       throw new Error(`validateTranscript: words are not non-decreasing at index ${i} ("${w.word}")`);
     }
-    lastWordEnd = Math.max(lastWordEnd, w.end);
+    lastWordStart = Math.max(lastWordStart, w.start);
   }
 
   // Validate segments

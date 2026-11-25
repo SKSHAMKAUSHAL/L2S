@@ -6,11 +6,16 @@
 import path from "path";
 import fs from "fs";
 import { spawnTracked } from "./process_manager.js";
-import { validateYouTubeUrl } from "./security/url.js";
+import { validateYouTubeUrl, validateMediaUrl } from "./security/url.js";
 
-const MAX_DOWNLOAD_BYTES = process.env.MAX_DOWNLOAD_BYTES || '2G';
-const MAX_SECONDS = process.env.MAX_SECONDS || '7200';
 const MAX_BUFFER_BYTES = 10 * 1024 * 1024; // 10MB output buffer cap
+
+function getDownloadLimits() {
+  return {
+    maxBytes: process.env.MAX_DOWNLOAD_BYTES || '2147483648',
+    maxSeconds: process.env.MAX_SECONDS || '7200',
+  };
+}
 
 /**
  * Execute command asynchronously with process tracking, timeout, and buffer capping
@@ -86,20 +91,24 @@ export function runCommandAsync(command, args, timeoutMs = 600000, jobId = null,
 export async function fetchVideoInfoAsync(url, timeoutMs = 30000) {
   if (!url || typeof url !== 'string') throw new Error('URL is required');
   
-  // Validate and normalize URL to prevent SSRF and argument injection
-  const { canonicalUrl } = validateYouTubeUrl(url);
+  // Validate and normalize URL (supports YouTube and Instagram) to prevent SSRF and argument injection
+  const { canonicalUrl, platform } = validateMediaUrl(url);
 
   const args = [
     '--dump-json',
     '--no-download',
     '--no-warnings',
     '--no-playlist',
+    '--no-update',
     '--socket-timeout', '30',
     '--retries', '3',
-    '--extractor-args', 'youtube:player_client=mediaconnect',
-    '--',
-    canonicalUrl,
   ];
+
+  if (platform === 'youtube') {
+    args.push('--extractor-args', 'youtube:player_client=mediaconnect');
+  }
+
+  args.push('--', canonicalUrl);
 
   const res = await runCommandAsync('yt-dlp', args, timeoutMs);
 
@@ -125,7 +134,23 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high', job
   fs.mkdirSync(outputDir, { recursive: true });
   const outputTemplate = path.join(outputDir, "%(id)s.%(ext)s");
 
-  const { canonicalUrl } = validateYouTubeUrl(url);
+  const { canonicalUrl, id: mediaId, platform } = validateMediaUrl(url);
+  const { maxBytes: MAX_DOWNLOAD_BYTES, maxSeconds: MAX_SECONDS } = getDownloadLimits();
+
+  // Fast reuse if complete MP4 for this mediaId already exists cleanly on disk
+  if (mediaId) {
+    const cachedMp4 = path.join(outputDir, `${mediaId}.mp4`);
+    const cachedPart = path.join(outputDir, `${mediaId}.mp4.part`);
+    if (fs.existsSync(cachedMp4) && !fs.existsSync(cachedPart)) {
+      try {
+        const st = fs.statSync(cachedMp4);
+        if (st.size > 100 * 1024) {
+          onLog?.(`⚡ Using cached local download: ${mediaId}.mp4 (${Math.round(st.size / (1024 * 1024))} MB)`);
+          return cachedMp4;
+        }
+      } catch {}
+    }
+  }
 
   // Quality format profiles (1080p max for blazing fast download while preserving full shorts quality)
   const qualityFormats = {
@@ -164,51 +189,56 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high', job
       name: "Standard download",
       args: [...commonArgs, "--", canonicalUrl],
     },
-    {
-      name: "iOS & Mobile Web client",
-      args: [
-        "-f", selectedFormat,
-        "--merge-output-format", "mp4",
-        "--no-playlist",
-        "--concurrent-fragments", "4",
-        "--buffer-size", "1024k",
-        "--no-update",
-        "--max-filesize", `${MAX_DOWNLOAD_BYTES}`,
-        "--match-filter", `duration<=${MAX_SECONDS}`,
-        "--socket-timeout", "30",
-        "--retries", "3",
-        "--extractor-args", "youtube:player_client=ios,mweb",
-        "-o", outputTemplate,
-        "--print", "after_move:filepath",
-        "--no-simulate",
-        "--no-warnings",
-        "--",
-        canonicalUrl,
-      ],
-    },
-    {
-      name: "Android client fallback",
-      args: [
-        "-f", selectedFormat,
-        "--merge-output-format", "mp4",
-        "--no-playlist",
-        "--concurrent-fragments", "4",
-        "--buffer-size", "1024k",
-        "--no-update",
-        "--max-filesize", `${MAX_DOWNLOAD_BYTES}`,
-        "--match-filter", `duration<=${MAX_SECONDS}`,
-        "--socket-timeout", "30",
-        "--retries", "3",
-        "--extractor-args", "youtube:player_client=android",
-        "-o", outputTemplate,
-        "--print", "after_move:filepath",
-        "--no-simulate",
-        "--no-warnings",
-        "--",
-        canonicalUrl,
-      ],
-    },
   ];
+
+  if (platform === 'youtube') {
+    strategies.push(
+      {
+        name: "iOS & Mobile Web client",
+        args: [
+          "-f", selectedFormat,
+          "--merge-output-format", "mp4",
+          "--no-playlist",
+          "--concurrent-fragments", "4",
+          "--buffer-size", "1024k",
+          "--no-update",
+          "--max-filesize", `${MAX_DOWNLOAD_BYTES}`,
+          "--match-filter", `duration<=${MAX_SECONDS}`,
+          "--socket-timeout", "30",
+          "--retries", "3",
+          "--extractor-args", "youtube:player_client=ios,mweb",
+          "-o", outputTemplate,
+          "--print", "after_move:filepath",
+          "--no-simulate",
+          "--no-warnings",
+          "--",
+          canonicalUrl,
+        ],
+      },
+      {
+        name: "Android client fallback",
+        args: [
+          "-f", selectedFormat,
+          "--merge-output-format", "mp4",
+          "--no-playlist",
+          "--concurrent-fragments", "4",
+          "--buffer-size", "1024k",
+          "--no-update",
+          "--max-filesize", `${MAX_DOWNLOAD_BYTES}`,
+          "--match-filter", `duration<=${MAX_SECONDS}`,
+          "--socket-timeout", "30",
+          "--retries", "3",
+          "--extractor-args", "youtube:player_client=android",
+          "-o", outputTemplate,
+          "--print", "after_move:filepath",
+          "--no-simulate",
+          "--no-warnings",
+          "--",
+          canonicalUrl,
+        ],
+      }
+    );
+  }
 
   let lastError = "";
 
@@ -222,10 +252,14 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high', job
 
       // Catch filter skips immediately so we don't stall looping strategies
       if (combinedOutput.includes('does not pass filter (duration<=')) {
-        throw new Error(`Video duration exceeds the maximum allowed limit of ${Math.round(Number(MAX_SECONDS) / 60)} minutes. Please update MAX_SECONDS in .env or choose a shorter video.`);
+        const fatalErr = new Error(`Video duration exceeds the maximum allowed limit of ${Math.round(Number(MAX_SECONDS) / 60)} minutes. Please update MAX_SECONDS in .env or choose a shorter video.`);
+        fatalErr.fatal = true;
+        throw fatalErr;
       }
       if (combinedOutput.includes('File is larger than max-filesize')) {
-        throw new Error(`Video file size exceeds the allowed MAX_DOWNLOAD_BYTES (${MAX_DOWNLOAD_BYTES}).`);
+        const fatalErr = new Error(`Video file size exceeds the allowed MAX_DOWNLOAD_BYTES (${MAX_DOWNLOAD_BYTES}).`);
+        fatalErr.fatal = true;
+        throw fatalErr;
       }
 
       if (result.status !== 0) {
@@ -248,6 +282,7 @@ export async function downloadVideo(url, outputDir, onLog, quality = 'high', job
       const found = findLatestVideo(outputDir);
       if (found) return found;
     } catch (err) {
+      if (err.fatal) throw err;
       lastError = err.message;
       if (onLog) onLog(`Strategy "${strategy.name}" error: ${lastError}`);
     }

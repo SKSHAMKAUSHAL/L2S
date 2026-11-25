@@ -25,13 +25,18 @@ const getConfig = () => ({
   cacheDir: path.join(os.homedir(), '.skate', 'cache'),
 });
 
-// Global pipeline state
+// Global pipeline state (per-job & per-user with single-tenant legacy fallback)
 let currentPipeline = null;
+const pipelinesByJobId = new Map();
+const pipelinesByUserId = new Map();
 
 /**
  * Cancel the currently running pipeline and terminate all child processes
  */
-export function stopPipeline() {
+export function stopPipeline(jobId = null) {
+  if (jobId && pipelinesByJobId.has(jobId)) {
+    pipelinesByJobId.get(jobId).stopped = true;
+  }
   if (currentPipeline) {
     currentPipeline.stopped = true;
   }
@@ -41,8 +46,19 @@ export function stopPipeline() {
 /**
  * Get the current pipeline state (for rendering after review)
  */
-export function getPipelineState() {
-  return currentPipeline;
+export function getPipelineState(userId = null, jobId = null) {
+  if (jobId && pipelinesByJobId.has(jobId)) {
+    const p = pipelinesByJobId.get(jobId);
+    if (!userId || !p.userId || p.userId === userId) return p;
+    return null;
+  }
+  if (userId && pipelinesByUserId.has(userId)) {
+    return pipelinesByUserId.get(userId);
+  }
+  if (!userId) return currentPipeline;
+  return currentPipeline && (!currentPipeline.userId || currentPipeline.userId === userId)
+    ? currentPipeline
+    : null;
 }
 
 /**
@@ -226,12 +242,45 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
   genre = typeof genre === 'string' ? genre : 'auto';
 
   const config = getConfig();
-  const pipeline = { stopped: false, videoPath: null, selected: null, clipsWithMeta: null, transcript: null };
-  currentPipeline = pipeline;
-
-  const { language = 'auto', description, timestamps, clipMode, clipCount, defaultRatio = '9:16', defaultZoom = 1.0, videoQuality = 'high', exportQuality = 'balanced', captionStyle } = options;
+  const {
+    language = 'auto',
+    description,
+    timestamps,
+    clipMode,
+    clipCount,
+    defaultRatio = '9:16',
+    defaultZoom = 1.0,
+    videoQuality = 'high',
+    exportQuality = 'balanced',
+    captionStyle,
+    videoInfo = null,
+    title = '',
+    channel = '',
+    glossary = [],
+    jobId = null,
+    userId = null,
+  } = options;
   const hasTimestamps = timestamps && timestamps.length > 0;
   const onlyManual = clipMode === 'only';
+
+  const tempDir = path.join(rootDir, 'temp');
+  const outputBaseDir = options.customOutputDir ? path.resolve(rootDir, options.customOutputDir) : path.join(rootDir, 'output');
+
+  const pipeline = {
+    jobId,
+    userId,
+    stopped: false,
+    videoPath: null,
+    audioPath: null,
+    selected: null,
+    clipsWithMeta: null,
+    transcript: null,
+    genre,
+    outputBaseDir,
+  };
+  currentPipeline = pipeline;
+  if (jobId) pipelinesByJobId.set(jobId, pipeline);
+  if (userId) pipelinesByUserId.set(userId, pipeline);
 
   if (onlyManual && !hasTimestamps) {
     broadcast({
@@ -241,9 +290,6 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
     });
     throw new Error('PIPELINE_CANCELLED');
   }
-
-  const tempDir = path.join(rootDir, 'temp');
-  const outputBaseDir = options.customOutputDir ? path.resolve(rootDir, options.customOutputDir) : path.join(rootDir, 'output');
 
   // Verify disk space before allocating temp files
   try {
@@ -275,7 +321,7 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
     if (isUrl) {
       const videoDir = path.join(tempDir, 'video');
       const logDownload = (msg) => broadcast({ type: 'log', level: 'info', msg: `   ${msg}` });
-      videoPath = await downloadVideo(source, videoDir, logDownload, videoQuality);
+      videoPath = await downloadVideo(source, videoDir, logDownload, videoQuality, jobId);
       broadcast({ type: 'log', level: 'success', msg: `✅ Downloaded: ${path.basename(videoPath)}` });
     } else {
       if (!fs.existsSync(source)) {
@@ -301,7 +347,7 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
     const audioDir = path.join(tempDir, 'audio');
     let audioPath;
     try {
-      audioPath = await extractAudio(videoPath, audioDir);
+      audioPath = await extractAudio(videoPath, audioDir, jobId);
     } catch (e) {
       broadcast({
         type: 'error',
@@ -311,6 +357,7 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
       });
       throw new Error('PIPELINE_CANCELLED');
     }
+    pipeline.audioPath = audioPath;
     broadcast({ type: 'log', level: 'success', msg: '✅ Audio extracted successfully' });
     checkStopped('audio-extraction');
 
@@ -321,9 +368,10 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
     try {
       transcript = await transcribeAudio(audioPath, config.cacheDir, {
         language,
-        title: videoInfo?.title || '',
+        title: videoInfo?.title || title || '',
         description: videoInfo?.description || description || '',
-        channel: videoInfo?.channel || '',
+        channel: videoInfo?.channel || channel || '',
+        glossary,
       }, (progressMsg) => {
         broadcast({ type: 'log', level: 'info', msg: `    ${progressMsg}` });
       });
@@ -581,6 +629,7 @@ export async function runPipeline(source, genre, broadcast, rootDir, options = {
     // ─── Send Clips to Frontend for Review ────────────
     broadcast({
       type: 'clips_ready',
+      jobId,
       clips: clipsWithMeta,
       videoPath: videoPath,
       language: transcript.language || 'unknown',

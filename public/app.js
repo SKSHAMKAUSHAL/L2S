@@ -434,6 +434,7 @@ function handleMessage(data) {
       break;
 
     case 'clips_ready':
+      if (data.jobId) currentJobId = data.jobId;
       allClips = data.clips || [];
       detectedLanguage = data.language || detectedLanguage;
       showReviewSection(allClips);
@@ -441,7 +442,8 @@ function handleMessage(data) {
 
     case 'render_done':
       renderedFiles = data.files || [];
-      currentJobId = data.jobId || (data.outputDir ? data.outputDir.replace(/^\/output\//, '') : currentJobId);
+      currentJobId = data.jobId || (data.outputDir ? data.outputDir.replace(/^\/(output|api\/files)\//, '') : currentJobId);
+      if (els.renderSelectedBtn) els.renderSelectedBtn.disabled = false;
       showResultsSection(renderedFiles);
       break;
 
@@ -819,7 +821,8 @@ function switchToLocalVideo() {
   // After pipeline download, switch from iframe to local video
   els.workspaceYtIframe.style.display = 'none';
   els.workspaceYtIframe.src = '';
-  els.workspaceLocalVideo.src = '/api/raw_video';
+  const jobQuery = currentJobId ? `?jobId=${encodeURIComponent(currentJobId)}&t=${Date.now()}` : `?t=${Date.now()}`;
+  els.workspaceLocalVideo.src = `/api/raw_video${jobQuery}`;
   els.workspaceLocalVideo.style.display = 'block';
   els.workspaceVideoPlaceholder.style.display = 'none';
 }
@@ -1188,9 +1191,10 @@ els.renderSelectedBtn.addEventListener('click', async () => {
       const res = await fetch('/api/render', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          selectedIndices: selectedIndicesArr, 
-          selectedClipsData, 
+        body: JSON.stringify({
+          jobId: currentJobId,
+          selectedIndices: selectedIndicesArr,
+          selectedClipsData,
           customOutputDir,
           captionStyle: currentCaptionPreset || 'bold',
           exportQuality: exportQuality || 'balanced'
@@ -1360,9 +1364,7 @@ function createResultCard(clip, videoUrl, index, storageType = 'local') {
       e.stopPropagation();
       const resultIdx = parseInt(editBtn.getAttribute('data-result-index'), 10);
       editorReRenderIndex = resultIdx;
-      const selectedArr = Array.from(selectedClips);
-      const clipIndex = selectedArr[resultIdx] ?? resultIdx;
-      openEditor(clipIndex);
+      openEditor(resultIdx);
     });
   }
 
@@ -1372,7 +1374,7 @@ function createResultCard(clip, videoUrl, index, storageType = 'local') {
     ytBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const idx = parseInt(ytBtn.getAttribute('data-clip-index'), 10);
-      publishSingleClip(idx, 'youtube');
+      publishSingleClip(idx, 'youtube', videoUrl);
     });
   }
 
@@ -1381,7 +1383,7 @@ function createResultCard(clip, videoUrl, index, storageType = 'local') {
     igBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const idx = parseInt(igBtn.getAttribute('data-clip-index'), 10);
-      publishSingleClip(idx, 'instagram');
+      publishSingleClip(idx, 'instagram', videoUrl);
     });
   }
 
@@ -1389,16 +1391,26 @@ function createResultCard(clip, videoUrl, index, storageType = 'local') {
 }
 
 // ─── Per-Clip Publish ────────────────────────
-async function publishSingleClip(index, platform) {
+async function publishSingleClip(index, platform, directFileUrl = null) {
   if (!platformConnections[platform]) {
     showToast(`Redirecting to ${platform === 'youtube' ? 'Google / YouTube' : 'Instagram / Meta'} login...`, 'info');
-    window.open(`/api/connect/${platform}`, '_blank', 'width=620,height=720');
+    try {
+      const connRes = await fetch(`/api/connect/${platform}`, { method: 'POST' });
+      const connData = await connRes.json();
+      if (connData.authUrl) {
+        window.open(connData.authUrl, '_blank', 'width=620,height=720');
+      } else {
+        showToast(connData.message || connData.error || `Could not start ${platform} login`, 'error');
+      }
+    } catch (e) {
+      showToast(`Failed to initiate ${platform} login`, 'error');
+    }
     return;
   }
 
-  const selectedArr = Array.from(selectedClips);
-  const clip = allClips[selectedArr[index]] || allClips[index] || {};
-  const fileUrl = renderedFiles[index];
+  const clip = allClips[index] || {};
+  const matchedEntry = renderedFiles.find(f => typeof f === 'object' && f.clipIndex === index) || renderedFiles[index];
+  const fileUrl = directFileUrl || (typeof matchedEntry === 'string' ? matchedEntry : matchedEntry?.url);
   if (!fileUrl) {
     showToast('No rendered file for this clip', 'error');
     return;
@@ -1456,7 +1468,9 @@ els.downloadAllBtn.addEventListener('click', () => {
   }
 
   const selected = Array.from(selectedClips).map(i => allClips[i]).filter(Boolean);
-  renderedFiles.forEach((url, i) => {
+  renderedFiles.forEach((entry, i) => {
+    const url = typeof entry === 'string' ? entry : entry?.url;
+    if (!url) return;
     const clip = selected[i] || allClips[i] || {};
     const title = clip.title || `Clip ${i + 1}`;
     const safeFilename = sanitizeFilename(title);
@@ -2777,7 +2791,7 @@ document.getElementById('editor-rerender-btn')?.addEventListener('click', async 
         const res = await fetch('/api/re-render', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clipIndex: editingClipIndex, clipData }),
+          body: JSON.stringify({ jobId: currentJobId, clipIndex: editingClipIndex, clipData }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Re-render failed');
@@ -3521,6 +3535,7 @@ els.btnPublish?.addEventListener('click', async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        jobId: currentJobId,
         clips: selectedArr,
         files: renderedFiles,
         workflow,
@@ -3741,7 +3756,7 @@ async function loadHomepageSystemStatus() {
         statGroqKey.textContent = groq.maskedKey || (hasKey ? 'gsk_... (Configured)' : 'Missing');
       }
       if (statGroqModel) {
-        statGroqModel.textContent = groq.selectedModel || groq.model || 'llama-3.3-70b-versatile';
+        statGroqModel.textContent = groq.selectedModel || groq.model || 'qwen/qwen3.8-27b';
       }
     } else {
       if (badgeGroq) {
@@ -4151,7 +4166,9 @@ async function loadCaptionPresets() {
     const res = await fetch('/api/caption-presets');
     if (!res.ok) return;
     const data = await res.json();
-    allCaptionPresets = data.presets || [];
+    allCaptionPresets = Array.isArray(data.presets)
+      ? data.presets
+      : Object.values(data || {}).filter(p => p && typeof p === 'object' && p.id);
     renderPresetCards();
   } catch (err) {
     console.warn('[Caption Studio] Failed to load presets:', err.message);

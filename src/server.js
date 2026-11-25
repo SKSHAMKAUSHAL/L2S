@@ -124,6 +124,73 @@ function getMimeType(filePath) {
   return map[ext] || 'application/octet-stream';
 }
 
+function getDirSizeBytes(dirPath) {
+  let total = 0;
+  if (!dirPath || !fs.existsSync(dirPath)) return 0;
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        total += getDirSizeBytes(fullPath);
+      } else if (entry.isFile()) {
+        try { total += fs.statSync(fullPath).size; } catch {}
+      }
+    }
+  } catch {}
+  return total;
+}
+
+function cleanDirectory(dirPath, keepDir = true) {
+  if (!dirPath || !fs.existsSync(dirPath)) return 0;
+  let freed = 0;
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        freed += cleanDirectory(fullPath, false);
+      } else if (entry.isFile()) {
+        try {
+          const sz = fs.statSync(fullPath).size;
+          fs.unlinkSync(fullPath);
+          freed += sz;
+        } catch {}
+      }
+    }
+    if (!keepDir) {
+      try { fs.rmdirSync(dirPath); } catch {}
+    }
+  } catch {}
+  return freed;
+}
+
+function validateSelectedIndices(selectedIndices, selectedClipsData, currentState) {
+  if (!Array.isArray(selectedIndices) || selectedIndices.length === 0) {
+    return { valid: false, error: 'No clips selected' };
+  }
+  if (!Array.isArray(selectedClipsData) || selectedClipsData.length !== selectedIndices.length) {
+    return { valid: false, error: 'Clip data count mismatch' };
+  }
+  if (!currentState || !Array.isArray(currentState.selected)) {
+    return { valid: false, error: 'Pipeline state missing' };
+  }
+  for (let i = 0; i < selectedIndices.length; i++) {
+    const idx = selectedIndices[i];
+    const dataClip = selectedClipsData[i];
+    if (idx < 0 || idx >= currentState.selected.length) {
+      return { valid: false, error: `Index ${idx} out of bounds` };
+    }
+    const stateClip = currentState.selected[idx];
+    const sStart = stateClip.chunk?.start ?? stateClip.start ?? 0;
+    const sEnd = stateClip.chunk?.end ?? stateClip.end ?? 0;
+    if (dataClip && (Math.abs(sStart - dataClip.start) > 0.5 || Math.abs(sEnd - dataClip.end) > 0.5)) {
+      return { valid: false, error: `Clip data mismatch at index ${idx}` };
+    }
+  }
+  return { valid: true };
+}
+
 /**
  * Factory for creating configured Express application
  */
@@ -549,7 +616,273 @@ export function createApp(options = {}) {
   });
 
   app.get('/api/process/status', requireAuth, (req, res) => {
-    res.json(getPipelineState());
+    res.json(getPipelineState(req.user.id, req.query.jobId || null));
+  });
+
+  app.post('/api/render', requireAuth, async (req, res) => {
+    const {
+      jobId: bodyJobId,
+      selectedIndices,
+      selectedClipsData,
+      customOutputDir,
+      captionStyle,
+      exportQuality,
+    } = req.body || {};
+
+    const state = getPipelineState(req.user.id, bodyJobId || null);
+    let resolvedVideoPath = state?.videoPath;
+    let resolvedSelected = state?.selected;
+    let activeJobId = bodyJobId || state?.jobId;
+
+    // Fallback to DB records if server state was cleared or restarted
+    if ((!resolvedVideoPath || !resolvedSelected) && activeJobId) {
+      const dbJob = repo.getJob(activeJobId, req.user.id);
+      const dbClips = dbJob ? repo.listClips(activeJobId, req.user.id) : [];
+      if (dbJob && dbClips.length > 0) {
+        if (!resolvedSelected) {
+          resolvedSelected = dbClips.map((c, idx) => {
+            let parsedMeta = {};
+            try { parsedMeta = JSON.parse(c.meta_json || '{}'); } catch {}
+            return {
+              index: idx,
+              chunk: {
+                start: c.start,
+                end: c.end,
+                text: parsedMeta.text || c.title || '',
+                words: parsedMeta.words || [],
+              },
+              combinedScore: c.score || 80,
+              aiTitle: c.title || '',
+              source: parsedMeta.source || 'ai',
+            };
+          });
+        }
+        if (!resolvedVideoPath || !fs.existsSync(resolvedVideoPath)) {
+          const tempVideoDir = path.join(rootDir, 'temp', 'video');
+          if (fs.existsSync(tempVideoDir)) {
+            const mp4s = fs.readdirSync(tempVideoDir)
+              .filter(f => f.endsWith('.mp4') && !f.endsWith('.part'))
+              .map(f => ({ name: f, mtime: fs.statSync(path.join(tempVideoDir, f)).mtimeMs }))
+              .sort((a, b) => b.mtime - a.mtime);
+            if (mp4s.length > 0) {
+              resolvedVideoPath = path.join(tempVideoDir, mp4s[0].name);
+            }
+          }
+        }
+      }
+    }
+
+    if (!resolvedVideoPath || !fs.existsSync(resolvedVideoPath) || !resolvedSelected) {
+      return res.status(400).json({ error: 'No active pipeline video or clips found. Please run Generate first.' });
+    }
+
+    const validation = validateSelectedIndices(selectedIndices, selectedClipsData, { selected: resolvedSelected });
+    if (!validation.valid) {
+      return res.status(400).json({
+        error: validation.error,
+        suggestion: 'Review page state may be stale. Please regenerate clips.',
+      });
+    }
+
+    if (!activeJobId) {
+      const userJobs = repo.listJobs(req.user.id);
+      activeJobId = userJobs[0]?.id || `job_${Date.now()}`;
+    }
+
+    res.json({ success: true, message: 'Rendering started', jobId: activeJobId });
+
+    const userId = req.user.id;
+    const emitUser = (payload) => broadcast({ ...payload, jobId: activeJobId }, userId);
+
+    emitUser({ type: 'step', step: 'render', status: 'active' });
+    emitUser({ type: 'log', level: 'info', msg: '🎬 Starting clip rendering with FFmpeg...' });
+
+    try {
+      const indices = selectedIndices;
+      const toRender = indices
+        .map((clipIndex, arrayIndex) => {
+          const baseClip = resolvedSelected[clipIndex];
+          if (!baseClip) return null;
+          const customData = selectedClipsData && selectedClipsData[arrayIndex]
+            ? { ...selectedClipsData[arrayIndex] }
+            : {};
+          if (captionStyle && !customData.captionPreset) customData.captionPreset = captionStyle;
+          if (exportQuality && !customData.exportQuality) customData.exportQuality = exportQuality;
+          return { ...baseClip, custom: customData };
+        })
+        .filter(Boolean);
+
+      if (toRender.length === 0) {
+        throw new Error('No valid clips to render after validation');
+      }
+
+      emitUser({ type: 'log', level: 'info', msg: `🎞️ Rendering ${toRender.length} selected clip(s)...` });
+
+      const userJobDir = path.join(rootDir, 'storage', userId, activeJobId);
+      fs.mkdirSync(path.join(userJobDir, 'clips'), { recursive: true });
+
+      const renderedJobs = await renderClips(
+        resolvedVideoPath,
+        toRender,
+        captionStyle || 'hormozi',
+        userJobDir,
+        (msg) => emitUser({ type: 'log', level: 'info', msg: `  ${msg}` })
+      );
+
+      // Optional mirror export to customOutputDir if specified and safe
+      let validCustomDir = null;
+      if (customOutputDir && typeof customOutputDir === 'string' && !customOutputDir.includes('\0') && !customOutputDir.startsWith('-')) {
+        try {
+          const resolvedCustom = path.resolve(customOutputDir);
+          fs.mkdirSync(resolvedCustom, { recursive: true });
+          validCustomDir = resolvedCustom;
+        } catch {}
+      }
+
+      const renderedFiles = [];
+      for (let i = 0; i < renderedJobs.length; i++) {
+        const job = renderedJobs[i];
+        const origClipIdx = indices[i];
+        const clipFile = job.clipFileName;
+        const localPath = job.clipPath;
+
+        if (validCustomDir && fs.existsSync(localPath)) {
+          try {
+            fs.copyFileSync(localPath, path.join(validCustomDir, clipFile));
+          } catch {}
+        }
+
+        // Sync clip file_path in SQLite DB for direct YouTube/Instagram publish
+        const existingDbClip =
+          repo.getClip(activeJobId, origClipIdx + 1, userId) ||
+          repo.getClip(activeJobId, origClipIdx, userId);
+        if (existingDbClip) {
+          repo.updateClip(existingDbClip.id, { file_path: localPath });
+        } else {
+          try {
+            repo.createClip({
+              jobId: activeJobId,
+              userId,
+              idx: origClipIdx + 1,
+              start: toRender[i].chunk?.start || 0,
+              end: toRender[i].chunk?.end || 0,
+              score: toRender[i].combinedScore || toRender[i].score || 80,
+              title: toRender[i].custom?.title || toRender[i].aiTitle || `Clip ${origClipIdx + 1}`,
+              filePath: localPath,
+              metaJson: JSON.stringify(toRender[i].custom || {}),
+            });
+          } catch {}
+        }
+
+        renderedFiles.push({
+          name: clipFile,
+          url: `/api/files/${activeJobId}/clips/${clipFile}`,
+          type: 'local',
+          clipIndex: origClipIdx,
+        });
+      }
+
+      emitUser({ type: 'log', level: 'success', msg: `✅ Rendered ${renderedFiles.length} clip(s) successfully!` });
+      emitUser({ type: 'step', step: 'render', status: 'done' });
+      emitUser({
+        type: 'render_done',
+        files: renderedFiles,
+        jobId: activeJobId,
+        outputDir: `/api/files/${activeJobId}`,
+        cloudEnabled: false,
+      });
+
+      // Lazy social content generation
+      const genre = state?.genre || 'default';
+      const language = state?.transcript?.language || 'unknown';
+      emitUser({ type: 'log', level: 'info', msg: '✍️ Generating social copy (titles, descriptions, hashtags)...' });
+
+      for (let ai = 0; ai < toRender.length; ai++) {
+        const clip = toRender[ai];
+        const clipText = clip.chunk?.text || clip.custom?.text || '';
+        if (!clipText) continue;
+        try {
+          const social = await generateSocialContent(clipText, genre, language);
+          emitUser({
+            type: 'social_content',
+            clipIndex: indices[ai],
+            title: social.title,
+            description: social.description,
+            hashtags: social.hashtags,
+            caption: social.caption,
+          });
+        } catch (socialErr) {
+          logger.warn({ err: socialErr.message }, 'Social content generation warning');
+        }
+      }
+      emitUser({ type: 'log', level: 'success', msg: '✅ Social content ready!' });
+    } catch (err) {
+      emitUser({ type: 'step', step: 'render', status: 'error' });
+      emitUser({ type: 'error', msg: `Render failed: ${err.message}` });
+    }
+  });
+
+  app.post('/api/re-render', requireAuth, async (req, res) => {
+    const { clipIndex = 0, clipData = {}, jobId: bodyJobId } = req.body || {};
+    const state = getPipelineState(req.user.id, bodyJobId || null);
+
+    if (!state || !state.videoPath || !fs.existsSync(state.videoPath)) {
+      return res.status(400).json({ error: 'No active pipeline video found for re-render.' });
+    }
+
+    const activeJobId = bodyJobId || state.jobId || `job_${Date.now()}`;
+    const userId = req.user.id;
+    const emitUser = (payload) => broadcast({ ...payload, jobId: activeJobId }, userId);
+
+    res.json({ success: true, message: 'Re-rendering clip...', jobId: activeJobId });
+
+    try {
+      const userJobDir = path.join(rootDir, 'storage', userId, activeJobId);
+      const clipsDir = path.join(userJobDir, 'clips');
+      fs.mkdirSync(clipsDir, { recursive: true });
+
+      const clipNum = String(Number(clipIndex) + 1).padStart(2, '0');
+      const toRender = [{
+        chunk: {
+          start: clipData.start || 0,
+          end: clipData.end || 0,
+          text: clipData.text || '',
+          words: clipData.words || [],
+        },
+        custom: clipData,
+      }];
+
+      emitUser({ type: 'log', level: 'info', msg: `🔄 Re-rendering clip ${clipNum}...` });
+
+      const rendered = await renderClips(
+        state.videoPath,
+        toRender,
+        clipData.captionPreset || 'hormozi',
+        userJobDir,
+        (msg) => emitUser({ type: 'log', level: 'info', msg: `  ${msg}` })
+      );
+
+      const producedPath = rendered[0]?.clipPath || path.join(clipsDir, 'clip-01.mp4');
+      const targetPath = path.join(clipsDir, `clip-${clipNum}.mp4`);
+      if (clipNum !== '01' && fs.existsSync(producedPath) && producedPath !== targetPath) {
+        fs.renameSync(producedPath, targetPath);
+      }
+
+      const finalUrl = `/api/files/${activeJobId}/clips/clip-${clipNum}.mp4`;
+      const existingDbClip = repo.getClip(activeJobId, Number(clipIndex) + 1, userId);
+      if (existingDbClip) {
+        repo.updateClip(existingDbClip.id, { file_path: targetPath });
+      }
+
+      emitUser({ type: 'log', level: 'success', msg: `✅ Clip ${clipNum} re-rendered!` });
+      emitUser({
+        type: 're_render_done',
+        clipIndex,
+        fileUrl: finalUrl,
+      });
+    } catch (err) {
+      emitUser({ type: 'error', msg: `Re-render failed: ${err.message}` });
+    }
   });
 
   // Captions API
@@ -559,13 +892,16 @@ export function createApp(options = {}) {
     if (!/^[0-9]{1,3}$/.test(clipIndex)) return res.status(400).json({ error: 'Invalid clipIndex parameter' });
 
     const job = repo.getJob(jobId, req.user.id);
-    const legacyPath = path.resolve(rootDir, 'output', jobId, `clip_${parseInt(clipIndex, 10)}.captions.json`);
-    const userPath = path.resolve(rootDir, 'storage', req.user.id, jobId, 'captions', `clip_${parseInt(clipIndex, 10)}.captions.json`);
+    const idxNum = parseInt(clipIndex, 10);
+    const legacyPath = path.resolve(rootDir, 'output', jobId, `clip_${idxNum}.captions.json`);
+    const userPathSub = path.resolve(rootDir, 'storage', req.user.id, jobId, 'captions', `clip_${idxNum}.captions.json`);
+    const userPathRoot = path.resolve(rootDir, 'storage', req.user.id, jobId, `clip_${idxNum}.captions.json`);
 
     let targetPath = null;
-    if (fs.existsSync(userPath)) targetPath = userPath;
+    if (fs.existsSync(userPathSub)) targetPath = userPathSub;
+    else if (fs.existsSync(userPathRoot)) targetPath = userPathRoot;
     else if (job && fs.existsSync(legacyPath)) targetPath = legacyPath;
-    else if (!job && !fs.existsSync(userPath)) {
+    else if (!job) {
       return res.status(404).json({ error: 'Captions not found for this clip' });
     } else if (fs.existsSync(legacyPath)) {
       targetPath = legacyPath;
@@ -588,17 +924,20 @@ export function createApp(options = {}) {
     if (!/^[0-9]{1,3}$/.test(clipIndex)) return res.status(400).json({ error: 'Invalid clipIndex parameter' });
 
     const job = repo.getJob(jobId, req.user.id);
-    const legacyPath = path.resolve(rootDir, 'output', jobId, `clip_${parseInt(clipIndex, 10)}.captions.json`);
+    const idxNum = parseInt(clipIndex, 10);
+    const legacyPath = path.resolve(rootDir, 'output', jobId, `clip_${idxNum}.captions.json`);
     const userDir = path.resolve(rootDir, 'storage', req.user.id, jobId, 'captions');
-    const userPath = path.resolve(userDir, `clip_${parseInt(clipIndex, 10)}.captions.json`);
+    const userPathSub = path.resolve(userDir, `clip_${idxNum}.captions.json`);
+    const userPathRoot = path.resolve(rootDir, 'storage', req.user.id, jobId, `clip_${idxNum}.captions.json`);
 
     let targetPath = null;
-    if (fs.existsSync(userPath)) targetPath = userPath;
+    if (fs.existsSync(userPathSub)) targetPath = userPathSub;
+    else if (fs.existsSync(userPathRoot)) targetPath = userPathRoot;
     else if (job && fs.existsSync(legacyPath)) targetPath = legacyPath;
     else if (fs.existsSync(legacyPath)) targetPath = legacyPath;
     else if (job) {
       fs.mkdirSync(userDir, { recursive: true });
-      targetPath = userPath;
+      targetPath = userPathSub;
     } else {
       return res.status(404).json({ error: 'Clip captions not found' });
     }
@@ -655,8 +994,11 @@ export function createApp(options = {}) {
     try {
       const padNum = String(idx).padStart(2, '0');
       const legacyCaptions = path.resolve(rootDir, 'output', jobId, `clip_${idx}.captions.json`);
-      const userCaptions = path.resolve(rootDir, 'storage', req.user.id, jobId, 'captions', `clip_${idx}.captions.json`);
-      const captionsPath = fs.existsSync(userCaptions) ? userCaptions : legacyCaptions;
+      const userCaptionsSub = path.resolve(rootDir, 'storage', req.user.id, jobId, 'captions', `clip_${idx}.captions.json`);
+      const userCaptionsRoot = path.resolve(rootDir, 'storage', req.user.id, jobId, `clip_${idx}.captions.json`);
+      const captionsPath = fs.existsSync(userCaptionsSub)
+        ? userCaptionsSub
+        : (fs.existsSync(userCaptionsRoot) ? userCaptionsRoot : legacyCaptions);
 
       if (!fs.existsSync(captionsPath)) {
         return res.status(404).json({ error: 'Captions not found for this clip' });
@@ -814,14 +1156,54 @@ export function createApp(options = {}) {
       if (typeof allowCloudFallback === 'boolean') {
         aiRegistry.allowCloudFallback = allowCloudFallback;
       }
+      const currentLLM = aiRegistry.getLLMProvider();
       res.json({
         success: true,
         activeLLM: aiRegistry.activeLLMId,
         activeSTT: aiRegistry.activeSTTId,
         allowCloudFallback: aiRegistry.allowCloudFallback,
+        isConfigured: currentLLM.isConfigured(),
+        needsKey: currentLLM.type === 'cloud' && !currentLLM.isConfigured(),
       });
     } catch (err) {
       res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/providers/key', requireAuth, (req, res) => {
+    const { providerId, apiKey } = req.body || {};
+    if (!providerId) {
+      return res.status(400).json({ error: 'providerId is required' });
+    }
+    const updated = aiRegistry.updateProviderKey(providerId, apiKey);
+    if (updated) {
+      res.json({ success: true, message: `Key updated for ${providerId}` });
+    } else {
+      res.status(400).json({ error: `Provider ${providerId} not found or is not a cloud provider` });
+    }
+  });
+
+  app.get('/api/providers/models', requireAuth, async (req, res) => {
+    const providerId = req.query.provider || aiRegistry.activeLLMId;
+    try {
+      const models = await aiRegistry.getAvailableModels(providerId);
+      const activeModel = aiRegistry.getLLMProvider(providerId)?.model || '';
+      res.json({ success: true, provider: providerId, models, activeModel });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/providers/model', requireAuth, (req, res) => {
+    const { provider, model } = req.body || {};
+    if (!provider || !model) {
+      return res.status(400).json({ error: 'provider and model are required' });
+    }
+    const ok = aiRegistry.setModel(provider, model);
+    if (ok) {
+      res.json({ success: true, provider, model });
+    } else {
+      res.status(400).json({ error: `Could not set model for provider ${provider}` });
     }
   });
 
@@ -957,23 +1339,48 @@ export function createApp(options = {}) {
 
       let clip = null;
       if (clipId) {
-        clip = repo.getClip(jobId, clipIndex !== undefined ? clipIndex : 0, req.user.id);
-        if (!clip) {
+        clip =
+          repo.getClip(jobId, clipIndex !== undefined ? clipIndex : 0, req.user.id) ||
+          repo.getClip(jobId, Number(clipIndex || 0) + 1, req.user.id);
+        if (!clip && jobId) {
           const allClips = repo.listClips(jobId, req.user.id);
           clip = allClips.find(c => c.id === clipId);
         }
       } else if (jobId !== undefined && clipIndex !== undefined) {
-        clip = repo.getClip(jobId, clipIndex, req.user.id);
+        clip =
+          repo.getClip(jobId, clipIndex, req.user.id) ||
+          repo.getClip(jobId, Number(clipIndex) + 1, req.user.id);
       }
 
       if (!clip) {
-        const padNum = String(clipIndex || 0).padStart(2, '0');
-        let fallbackPath = jobId ? path.resolve(rootDir, 'output', jobId, 'clips', `clip-${padNum}.mp4`) : null;
-        if (!fallbackPath || !fs.existsSync(fallbackPath)) {
-          if (fileUrl) {
-            const rel = fileUrl.replace(/^\/api\/files\//, '').replace(/^\/output\//, '');
+        const idx1Based = Number(clipIndex || 0) + 1;
+        const padNum1 = String(idx1Based).padStart(2, '0');
+        const padNum0 = String(clipIndex || 0).padStart(2, '0');
+        let fallbackPath = null;
+
+        if (jobId) {
+          const candidates = [
+            path.resolve(rootDir, 'storage', req.user.id, jobId, 'clips', `clip-${padNum1}.mp4`),
+            path.resolve(rootDir, 'storage', req.user.id, jobId, 'clips', `clip-${padNum0}.mp4`),
+            path.resolve(rootDir, 'output', jobId, 'clips', `clip-${padNum1}.mp4`),
+            path.resolve(rootDir, 'output', jobId, 'clips', `clip-${padNum0}.mp4`),
+          ];
+          fallbackPath = candidates.find(p => fs.existsSync(p)) || null;
+        }
+        if ((!fallbackPath || !fs.existsSync(fallbackPath)) && fileUrl) {
+          const cleanUrl = String(fileUrl).split('?')[0];
+          const filesMatch = cleanUrl.match(/^\/api\/files\/([^/]+)\/(.+)$/);
+          if (filesMatch) {
+            const cand = path.resolve(rootDir, 'storage', req.user.id, filesMatch[1], filesMatch[2]);
+            if (cand.startsWith(path.resolve(rootDir, 'storage', req.user.id)) && fs.existsSync(cand)) {
+              fallbackPath = cand;
+            }
+          } else {
+            const rel = cleanUrl.replace(/^\/output\//, '');
             const cand = path.resolve(rootDir, 'output', rel);
-            if (fs.existsSync(cand)) fallbackPath = cand;
+            if (cand.startsWith(path.resolve(rootDir, 'output')) && fs.existsSync(cand)) {
+              fallbackPath = cand;
+            }
           }
         }
         if (fallbackPath && fs.existsSync(fallbackPath)) {
@@ -981,8 +1388,8 @@ export function createApp(options = {}) {
             id: clipId || 'clp_' + Date.now(),
             job_id: jobId || 'job_' + Date.now(),
             user_id: req.user.id,
-            idx: Number(clipIndex || 0),
-            title: metadata.title || `Clip ${Number(clipIndex || 0) + 1}`,
+            idx: idx1Based,
+            title: metadata.title || `Clip ${idx1Based}`,
             file_path: fallbackPath,
           };
         } else {
@@ -1042,13 +1449,116 @@ export function createApp(options = {}) {
 
   app.post('/api/publish', requireAuth, async (req, res) => {
     try {
-      const { jobId, clips = [], workflow = {} } = req.body || {};
+      let { jobId, clips = [], files = [], workflow = {} } = req.body || {};
+      const state = getPipelineState(req.user.id, jobId || null);
+      if (!jobId) {
+        jobId = state?.jobId || repo.listJobs(req.user.id)[0]?.id;
+      }
       if (!jobId) {
         return res.status(400).json({ error: 'jobId is required' });
       }
-      res.json({ success: true, message: 'Publishing initiated', jobId });
+
+      const connections = getConnectionStatus(req.user.id, repo);
+      const platforms = [];
+      if (workflow?.youtube && connections.youtube?.connected) platforms.push('youtube');
+      if (workflow?.instagram && connections.instagram?.connected) platforms.push('instagram');
+
+      if (platforms.length === 0) {
+        return res.json({
+          success: false,
+          message: 'No connected platforms selected. Connect YouTube or Instagram first.',
+          published: 0,
+        });
+      }
+
+      res.json({ success: true, message: `Publishing ${clips.length} clip(s) to ${platforms.join(' & ')}...`, jobId });
+
+      const userId = req.user.id;
+      const emitUser = (payload) => broadcast({ ...payload, jobId }, userId);
+      let successCount = 0;
+      let failedCount = 0;
+      const results = [];
+
+      for (let i = 0; i < clips.length; i++) {
+        const c = clips[i];
+        const fileEntry = files[i];
+        const rawUrl = typeof fileEntry === 'string' ? fileEntry : fileEntry?.url;
+        let filePath = null;
+
+        if (rawUrl) {
+          const cleanUrl = rawUrl.split('?')[0];
+          const match = cleanUrl.match(/^\/api\/files\/([^/]+)\/(.+)$/);
+          if (match) {
+            const cand = path.resolve(rootDir, 'storage', userId, match[1], match[2]);
+            if (cand.startsWith(path.resolve(rootDir, 'storage', userId)) && fs.existsSync(cand)) {
+              filePath = cand;
+            }
+          }
+        }
+        if (!filePath) {
+          const dbClip = repo.getClip(jobId, (c.index ?? i) + 1, userId) || repo.getClip(jobId, c.index ?? i, userId);
+          if (dbClip?.file_path && fs.existsSync(dbClip.file_path)) filePath = dbClip.file_path;
+        }
+        if (!filePath) {
+          const pad = String(i + 1).padStart(2, '0');
+          const cand = path.resolve(rootDir, 'storage', userId, jobId, 'clips', `clip-${pad}.mp4`);
+          if (fs.existsSync(cand)) filePath = cand;
+        }
+
+        for (const plat of platforms) {
+          if (!filePath || !fs.existsSync(filePath)) {
+            failedCount++;
+            results.push({ clipIndex: i, platform: plat, success: false, error: 'File not found' });
+            continue;
+          }
+          try {
+            let pubRes;
+            if (plat === 'instagram') {
+              const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+              const pubUrl = `${baseUrl}/api/files/${jobId}/clips/${path.basename(filePath)}`;
+              pubRes = await publishClipToInstagram({
+                clipId: c.id || `clp_${jobId}_${i}`,
+                userId,
+                jobId,
+                filePath,
+                fileUrl: pubUrl,
+                metadata: workflow.instagram,
+                clip: c,
+                clipIndex: i,
+                repo,
+                broadcast: emitUser,
+              });
+            } else {
+              pubRes = await publishClipToYouTube({
+                clipId: c.id || `clp_${jobId}_${i}`,
+                userId,
+                jobId,
+                filePath,
+                metadata: workflow.youtube,
+                clip: c,
+                clipIndex: i,
+                repo,
+                broadcast: emitUser,
+              });
+            }
+            if (pubRes?.success) successCount++;
+            else failedCount++;
+            results.push({ clipIndex: i, platform: plat, ...pubRes });
+            emitUser({ type: 'publish_progress', clipIndex: i, total: clips.length, status: pubRes?.success ? 'done' : 'failed', result: pubRes });
+          } catch (pubErr) {
+            failedCount++;
+            results.push({ clipIndex: i, platform: plat, success: false, error: pubErr.message });
+          }
+        }
+      }
+
+      emitUser({
+        type: 'publish_done',
+        results,
+        summary: { total: clips.length * platforms.length, success: successCount, failed: failedCount },
+      });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      if (!res.headersSent) res.status(500).json({ error: err.message });
     }
   });
 
@@ -1058,8 +1568,18 @@ export function createApp(options = {}) {
     try {
       const media = validateMediaUrl(url);
       const info = await fetchVideoInfoAsync(media.canonicalUrl, 30000);
-      info.platform = media.platform;
-      res.json(info);
+      const sourceResolution = Array.isArray(info.formats) ? analyzeSourceFormats(info.formats) : null;
+      res.json({
+        id: info.id || media.id,
+        platform: media.platform,
+        title: info.title || 'Unknown Title',
+        thumbnail: info.thumbnail || info.thumbnails?.[0]?.url || '',
+        duration: info.duration || 0,
+        channel: info.uploader || info.channel || 'Unknown Channel',
+        viewCount: info.view_count || 0,
+        description: (info.description || '').slice(0, 300),
+        sourceResolution,
+      });
     } catch (e) {
       const isClientErr = e.message.includes('protocol') || e.message.includes('authorized') || e.message.includes('Malformed') || e.message.includes('Playlists') || e.message.includes('dash') || e.message.includes('video ID') || e.message.includes('userinfo') || e.message.includes('Custom ports') || e.message.includes('Instagram');
       res.status(isClientErr ? 400 : 500).json({ error: e.message });
@@ -1069,23 +1589,80 @@ export function createApp(options = {}) {
   app.post('/api/video-info', requireAuth, handleVideoInfo);
 
   app.get('/api/ai/models', requireAuth, (req, res) => {
-    res.json({ models: ['llama-3.3-70b-versatile', 'llama3.2:3b'] });
+    res.json({ models: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'llama3.2:3b'] });
   });
 
   app.post('/api/ai/switch', requireAuth, (req, res) => {
     res.json({ success: true });
   });
 
-  app.get('/api/captions/presets', requireAuth, (req, res) => {
-    res.json(CAPTION_PRESETS);
+  app.get(['/api/captions/presets', '/api/caption-presets'], requireAuth, (req, res) => {
+    res.json({ ...CAPTION_PRESETS, presets: Object.values(CAPTION_PRESETS) });
+  });
+
+  app.get('/api/export-profiles', requireAuth, (req, res) => {
+    res.json({
+      exportProfiles: EXPORT_PROFILES,
+      sourceProfiles: SOURCE_QUALITY_PROFILES,
+      detectedEncoder: detectEncoder(),
+    });
+  });
+
+  app.post('/api/set-output-dir', requireAuth, (req, res) => {
+    const { dirPath } = req.body || {};
+    if (!dirPath || typeof dirPath !== 'string') {
+      return res.status(400).json({ error: 'Path is required' });
+    }
+    if (dirPath.includes('\0') || dirPath.startsWith('-')) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+    try {
+      const resolved = path.resolve(dirPath);
+      fs.mkdirSync(resolved, { recursive: true });
+      if (fs.existsSync(resolved)) {
+        return res.json({ success: true, path: resolved });
+      }
+      return res.status(400).json({ error: 'Could not create directory' });
+    } catch (e) {
+      return res.status(400).json({ error: `Invalid path: ${e.message}` });
+    }
   });
 
   app.get('/api/storage/status', requireAuth, (req, res) => {
-    res.json({ tempMB: '0.00', outputMB: '0.00', totalMB: '0.00' });
+    const tempDir = path.join(rootDir, 'temp');
+    const userStorageDir = path.join(rootDir, 'storage', req.user.id);
+    const tempBytes = getDirSizeBytes(tempDir);
+    const userBytes = getDirSizeBytes(userStorageDir);
+    const totalBytes = tempBytes + userBytes;
+
+    res.json({
+      tempMB: (tempBytes / (1024 * 1024)).toFixed(2),
+      outputMB: (userBytes / (1024 * 1024)).toFixed(2),
+      totalMB: (totalBytes / (1024 * 1024)).toFixed(2),
+      totalGB: (totalBytes / (1024 * 1024 * 1024)).toFixed(2),
+    });
   });
 
   app.post('/api/storage/clean', requireAuth, (req, res) => {
-    res.json({ success: true, freedMB: '0.00' });
+    const { cleanOutput = false } = req.body || {};
+    const tempDir = path.join(rootDir, 'temp');
+    let freedBytes = 0;
+
+    if (fs.existsSync(tempDir)) {
+      freedBytes += cleanDirectory(path.join(tempDir, 'video'), true);
+      freedBytes += cleanDirectory(path.join(tempDir, 'audio'), true);
+    }
+
+    if (cleanOutput) {
+      const userStorageDir = path.join(rootDir, 'storage', req.user.id);
+      if (fs.existsSync(userStorageDir)) {
+        freedBytes += cleanDirectory(userStorageDir, true);
+      }
+    }
+
+    const freedMB = (freedBytes / (1024 * 1024)).toFixed(2);
+    broadcast({ type: 'log', level: 'info', msg: `🧹 Cleaned storage: freed ${freedMB} MB` }, req.user.id);
+    res.json({ success: true, freedMB, message: `Freed ${freedMB} MB of storage space` });
   });
 
   app.post('/api/pipeline/stop', requireAuth, async (req, res) => {
@@ -1103,7 +1680,55 @@ export function createApp(options = {}) {
   });
 
   app.get('/api/raw_video', requireAuth, (req, res) => {
-    res.status(404).send('Raw video not available');
+    const state = getPipelineState(req.user.id, req.query.jobId || null);
+    let videoPath = state?.videoPath;
+
+    if (!videoPath || !fs.existsSync(videoPath)) {
+      const tempVideoDir = path.join(rootDir, 'temp', 'video');
+      if (fs.existsSync(tempVideoDir)) {
+        const files = fs.readdirSync(tempVideoDir)
+          .filter(f => f.endsWith('.mp4') && !f.endsWith('.part'))
+          .map(f => ({ name: f, mtime: fs.statSync(path.join(tempVideoDir, f)).mtimeMs }))
+          .sort((a, b) => b.mtime - a.mtime);
+        if (files.length > 0) {
+          videoPath = path.join(tempVideoDir, files[0].name);
+        }
+      }
+    }
+
+    if (!videoPath || !fs.existsSync(videoPath)) {
+      return res.status(404).send('Raw video not available');
+    }
+
+    const stat = fs.statSync(videoPath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      if (isNaN(start) || start >= fileSize || end >= fileSize) {
+        res.status(416).setHeader('Content-Range', `bytes */${fileSize}`);
+        return res.end();
+      }
+      const chunksize = (end - start) + 1;
+      const file = fs.createReadStream(videoPath, { start, end });
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': 'video/mp4',
+      });
+      file.pipe(res);
+    } else {
+      res.writeHead(200, {
+        'Content-Length': fileSize,
+        'Accept-Ranges': 'bytes',
+        'Content-Type': 'video/mp4',
+      });
+      fs.createReadStream(videoPath).pipe(res);
+    }
   });
 
   app.get('/dashboard', (req, res) => {

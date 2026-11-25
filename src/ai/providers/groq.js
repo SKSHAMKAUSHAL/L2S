@@ -4,9 +4,30 @@
 
 import { BaseLLMProvider, extractAndParseJSON, maskApiKey } from '../contracts.js';
 
+const PREFERRED_CHAT_MODELS = [
+  'qwen/qwen3.8-27b',
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'mixtral-8x7b-32768',
+  'gemma2-9b-it',
+];
+
+function isChatModel(id = '') {
+  const lower = id.toLowerCase();
+  return (
+    !lower.includes('whisper') &&
+    !lower.includes('guard') &&
+    !lower.includes('orpheus') &&
+    !lower.includes('tts') &&
+    !lower.includes('safeguard')
+  );
+}
+
 export class GroqProvider extends BaseLLMProvider {
   constructor(config = {}) {
-    const model = config.model || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+    const model = config.model || process.env.GROQ_MODEL || 'qwen/qwen3.8-27b';
     super('groq', 'Groq Cloud (Ultra-Fast LPUs)', 'cloud', model);
 
     this.apiKey = typeof config.apiKey === 'string' ? config.apiKey : (process.env.GROQ_API_KEY || '');
@@ -61,9 +82,11 @@ export class GroqProvider extends BaseLLMProvider {
       const data = await res.json();
       const models = Array.isArray(data.data) ? data.data.map(m => m.id) : [];
 
-      // If current model isn't in available models, pick first available chat model
+      // If current model isn't in available models, pick highest priority live chat LLM
       if (models.length > 0 && !models.includes(this.model)) {
-        const chatModel = models.find(m => !m.includes('whisper') && !m.includes('guard')) || models[0];
+        const preferredMatch = PREFERRED_CHAT_MODELS.find(pm => models.includes(pm));
+        const fallbackMatch = models.find(isChatModel);
+        const chatModel = preferredMatch || fallbackMatch || models[0];
         if (chatModel) this.model = chatModel;
       }
 
@@ -99,16 +122,14 @@ export class GroqProvider extends BaseLLMProvider {
       if (!res.ok) return [];
       const data = await res.json();
       if (!Array.isArray(data.data)) return [];
-      // Filter to chat/LLM models (exclude pure audio or prompt-guard models)
-      return data.data
-        .map(m => m.id)
-        .filter(id => !id.includes('whisper') && !id.includes('prompt-guard'));
+      // Filter to chat/LLM models (exclude audio, TTS, and prompt-guard models)
+      return data.data.map(m => m.id).filter(isChatModel);
     } catch (e) {
       return [
+        'qwen/qwen3.8-27b',
+        'openai/gpt-oss-120b',
+        'openai/gpt-oss-20b',
         'llama-3.3-70b-versatile',
-        'llama-3.1-8b-instant',
-        'mixtral-8x7b-32768',
-        'gemma2-9b-it',
       ];
     }
   }

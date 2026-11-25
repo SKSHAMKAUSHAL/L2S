@@ -56,14 +56,56 @@ export function createBudget(maxTokens = 120000) {
   };
 }
 
+const PREFERRED_GROQ_CHAT_MODELS = [
+  'qwen/qwen3.8-27b',
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'mixtral-8x7b-32768',
+  'gemma2-9b-it',
+];
+
 let _defaultGroqClient = null;
+let _lastGroqApiKey = null;
+let _resolvedFallbackModel = null;
+
 function getGroqClient() {
-  if (!_defaultGroqClient) {
+  const currentKey = process.env.GROQ_API_KEY || '';
+  if (!_defaultGroqClient || _lastGroqApiKey !== currentKey) {
+    _lastGroqApiKey = currentKey;
+    _resolvedFallbackModel = null;
     _defaultGroqClient = new Groq({
-      apiKey: process.env.GROQ_API_KEY || '',
+      apiKey: currentKey,
     });
   }
   return _defaultGroqClient;
+}
+
+async function discoverLiveGroqModel(groqClient, excludeModel = '') {
+  try {
+    const res = await groqClient.models.list();
+    const ids = (res?.data || []).map(m => m.id);
+    if (ids.length === 0) return null;
+
+    const preferred = PREFERRED_GROQ_CHAT_MODELS.find(m => m !== excludeModel && ids.includes(m));
+    if (preferred) return preferred;
+
+    const firstChat = ids.find((id) => {
+      const l = id.toLowerCase();
+      return (
+        id !== excludeModel &&
+        !l.includes('whisper') &&
+        !l.includes('guard') &&
+        !l.includes('orpheus') &&
+        !l.includes('tts') &&
+        !l.includes('safeguard')
+      );
+    });
+    return firstChat || null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -93,7 +135,7 @@ export async function chatJSON({
   client,
 }) {
   const groq = client || getGroqClient();
-  const targetModel = model || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  let targetModel = model || _resolvedFallbackModel || process.env.GROQ_MODEL || 'qwen/qwen3.8-27b';
 
   const validate = schema ? ajv.compile(schema) : null;
 
@@ -104,6 +146,7 @@ export async function chatJSON({
 
   const maxAttempts = 3;
   let lastError = null;
+  let didModelFallback = false;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Check budget before making request
@@ -170,6 +213,19 @@ export async function chatJSON({
       lastError = err;
       if (err instanceof BudgetExceededError) {
         throw err;
+      }
+      const isModelNotFound =
+        !didModelFallback &&
+        !client &&
+        (err.status === 404 || err.statusCode === 404 || err.message?.includes('model_not_found') || err.message?.includes('does not exist'));
+      if (isModelNotFound) {
+        didModelFallback = true;
+        const discovered = await discoverLiveGroqModel(groq, targetModel);
+        if (discovered) {
+          targetModel = discovered;
+          _resolvedFallbackModel = discovered;
+          continue;
+        }
       }
       if (attempt === maxAttempts) {
         throw lastError;

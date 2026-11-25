@@ -417,6 +417,51 @@ export async function transcribeGroq(audioPath, options = {}, onProgress) {
       });
     }
 
+    // Normalize timestamps across noisy Whisper predictions and chunk seams
+    allWords = allWords
+      .filter(w => w && w.word && Number.isFinite(w.start) && Number.isFinite(w.end))
+      .map(w => ({
+        word: w.word,
+        start: Math.max(0, w.start),
+        end: Math.max(0, w.end),
+      }))
+      .sort((a, b) => a.start - b.start);
+
+    for (let i = 0; i < allWords.length; i++) {
+      const w = allWords[i];
+      if (w.end < w.start) w.end = w.start;
+      if (i > 0) {
+        const prev = allWords[i - 1];
+        if (w.start < prev.start) w.start = prev.start;
+        if (prev.end > w.start + 0.05) {
+          prev.end = Math.max(prev.start, w.start);
+        }
+        if (w.end < w.start) w.end = w.start;
+      }
+    }
+
+    allSegments = allSegments
+      .filter(s => s && Number.isFinite(s.start) && Number.isFinite(s.end))
+      .map(s => ({
+        ...s,
+        start: Math.max(0, s.start),
+        end: Math.max(Math.max(0, s.start), s.end),
+      }))
+      .sort((a, b) => a.start - b.start);
+
+    for (let i = 0; i < allSegments.length; i++) {
+      if (i > 0 && allSegments[i].start < allSegments[i - 1].start) {
+        allSegments[i].start = allSegments[i - 1].start;
+        if (allSegments[i].end < allSegments[i].start) {
+          allSegments[i].end = allSegments[i].start;
+        }
+      }
+    }
+
+    if (allWords.length > 0 && allSegments.length > 0) {
+      allSegments = mapWordsToSegments(allSegments, allWords);
+    }
+
     const fullText = allSegments.map(s => s.text).join(' ').trim();
     const scriptStats = computeScriptStats(fullText);
 

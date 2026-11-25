@@ -61,7 +61,9 @@ export async function runClipEngine(transcript, options = {}) {
     llmClient,
   } = options;
 
-  const maxTokens = Number(process.env.CLIP_ENGINE_MAX_TOKENS) || 120000;
+  const envMaxTokens = Number(process.env.CLIP_ENGINE_MAX_TOKENS);
+  // Treat legacy per-call <= 8192 values safely so multi-chunk long videos don't exhaust per-job token budget prematurely
+  const maxTokens = (envMaxTokens && envMaxTokens >= 16384) ? envMaxTokens : 120000;
   const budget = createBudget(maxTokens);
 
   // 1. Build sentences

@@ -46,8 +46,20 @@ export function refineCandidate(candidate, allSentences = [], allWords = [], opt
   const sMap = new Map();
   sentencesWithIdx.forEach(s => sMap.set(s.id, s));
 
-  let startSentence = sMap.get(candidate.startSentence) || sentencesWithIdx[0];
-  let endSentence = sMap.get(candidate.endSentence) || sentencesWithIdx[sentencesWithIdx.length - 1];
+  let startSentence = sMap.get(candidate.startSentence);
+  let endSentence = sMap.get(candidate.endSentence);
+
+  if (!startSentence && typeof candidate.start === 'number') {
+    startSentence = sentencesWithIdx.find(s => s.end > candidate.start) || sentencesWithIdx[0];
+  } else if (!startSentence) {
+    startSentence = sentencesWithIdx[0];
+  }
+
+  if (!endSentence && typeof candidate.end === 'number') {
+    endSentence = [...sentencesWithIdx].reverse().find(s => s.start < candidate.end) || sentencesWithIdx[sentencesWithIdx.length - 1];
+  } else if (!endSentence) {
+    endSentence = sentencesWithIdx[sentencesWithIdx.length - 1];
+  }
 
   if (startSentence.index > endSentence.index) {
     const temp = startSentence;
